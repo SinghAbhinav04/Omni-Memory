@@ -1,0 +1,19 @@
+OmniMemory
+Copyright (c) 2026 Abhinav Singh — MIT License
+
+This project reuses ideas and (where noted) modules from two MIT-licensed
+projects. Thank you to their authors:
+
+- graphify — https://github.com/Graphify-Labs/graphify
+  MIT License, Copyright (c) 2026 Safi Shamsi
+  Reused: local tree-sitter AST code-graph pipeline (extract/build/cluster/
+  analyze/export/callflow), MCP serve pattern, multi-IDE skill install pattern,
+  DB introspection.
+
+- supermemory — https://github.com/supermemoryai/supermemory
+  MIT License, Copyright (c) 2025 supermemory
+  Reused: memory-engine design (fact extraction, contradiction handling,
+  temporal forgetting), the @supermemory/memory-graph visualization component,
+  and MCP tool shapes.
+
+Reused source retains its original copyright and license headers.

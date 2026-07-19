@@ -1,0 +1,28 @@
+[project]
+name = "omni-memory"
+version = "0.1.0"
+description = "Persistent, branch-aware, git-anchored memory & context layer for coding agents."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Abhinav Singh" }]
+keywords = ["ai", "memory", "coding-agent", "knowledge-graph", "claude-code", "mcp"]
+dependencies = []  # core runs on the stdlib; optional extras add graph/UI power
+
+[project.optional-dependencies]
+graph = ["networkx>=3.0"]          # richer graph analysis (P1 graphify AST)
+serve = ["fastapi>=0.110", "uvicorn>=0.29"]  # optional richer API (P1)
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+omni-memory = "omni_memory.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["omni_memory", "omni_memory.graph"]
+
+[tool.setuptools.package-data]
+omni_memory = ["static/*.html"]

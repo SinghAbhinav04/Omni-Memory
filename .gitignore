@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+web/dist/
+.omni-memory/
+*.db
+.DS_Store
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OmniMemory</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#0b0b0c;color:#d6d6d8;
+    font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  #app{display:flex;height:100vh}
+  nav{width:180px;flex:none;border-right:1px solid #1c1c1f;padding:18px 0;background:#0d0d0e}
+  nav h1{font-size:14px;margin:0 18px 18px;letter-spacing:.06em;color:#eee}
+  nav a{display:block;padding:8px 18px;color:#8a8a90;cursor:pointer;border-left:2px solid transparent}
+  nav a.on{color:#f0f0f0;border-left-color:#f0f0f0;background:#141416}
+  main{flex:1;overflow:auto;position:relative}
+  header{padding:16px 24px;border-bottom:1px solid #1c1c1f;color:#7c7c82;font-size:12px}
+  .wrap{padding:20px 24px}
+  .hint{color:#5a5a60}
+  input.search{width:100%;max-width:420px;background:#101012;border:1px solid #23232a;
+    color:#e6e6e8;border-radius:8px;padding:8px 12px;font:inherit;margin-bottom:16px}
+  .mem{border:1px solid #1c1c1f;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#0e0e10}
+  .mem .k{color:#6c6c72;font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+  .mem .t{margin:4px 0 6px;color:#eaeaea}
+  .mem .f{color:#7c7c82;font-size:11px}
+  .chip{display:inline-block;border:1px solid #2f2f34;border-radius:9px;padding:1px 8px;
+    margin-right:6px;color:#a9a9af;font-size:10px}
+  svg{width:100%;height:calc(100vh - 54px);display:block}
+  text{font:10px ui-monospace,monospace;fill:#8a8a90}
+  .brow{border:1px solid #1c1c1f;border-radius:10px;padding:10px 14px;margin-bottom:8px;
+    background:#0e0e10;display:flex;justify-content:space-between;gap:12px}
+  .brow b{color:#eee}
+  .merged{color:#7c7c82}
+</style></head>
+<body>
+<div id="app">
+  <nav>
+    <h1>◇ OmniMemory</h1>
+    <a data-tab="memory" class="on">Memory</a>
+    <a data-tab="graph">Graph</a>
+    <a data-tab="branches">Repo Graph</a>
+  </nav>
+  <main>
+    <header id="hdr">loading…</header>
+    <div class="wrap" id="view"></div>
+  </main>
+</div>
+<script>
+const view = document.getElementById('view'), hdr = document.getElementById('hdr');
+async function api(p){ const r = await fetch(p); return r.json(); }
+function esc(s){ return (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{
+  document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on'));
+  a.classList.add('on'); render(a.dataset.tab);
+});
+
+async function render(tab){
+  view.innerHTML = '<span class="hint">loading…</span>';
+  if(tab==='memory') return renderMemory();
+  if(tab==='graph') return renderGraph();
+  if(tab==='branches') return renderBranches();
+}
+
+async function renderMemory(){
+  const mems = await api('/api/memories');
+  hdr.textContent = mems.length + ' memories';
+  view.innerHTML = '<input class="search" placeholder="search memory…">' +
+    '<div id="list"></div>';
+  const list = document.getElementById('list');
+  const draw = f => { list.innerHTML = mems.filter(m=>!f||m.text.toLowerCase().includes(f))
+    .map(m=>`<div class="mem"><span class="k">${esc(m.kind)} · ${esc(m.branch)} · [${m.id}]</span>
+      <div class="t">${esc(m.text)}</div>
+      ${(m.files||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join('')}</div>`).join('')
+      || '<span class="hint">no memories yet — work in a session or run: omni-memory remember "…"</span>'; };
+  draw('');
+  view.querySelector('.search').oninput = e => draw(e.target.value.toLowerCase());
+}
+
+async function renderGraph(){
+  const g = await api('/api/graph');
+  hdr.textContent = g.nodes.length + ' nodes · ' + g.edges.length + ' links';
+  view.innerHTML = '<svg id="g"></svg>';
+  const nodes = g.nodes.map(d=>({...d})), links = g.edges.map(e=>({source:e.from,target:e.to}));
+  const svg = d3.select('#g'), gg = svg.append('g');
+  svg.call(d3.zoom().scaleExtent([.2,4]).on('zoom',e=>gg.attr('transform',e.transform)));
+  const col = {branch:'#eee',memory:'#9aa',file:'#77787c'};
+  const sim = d3.forceSimulation(nodes)
+    .force('link',d3.forceLink(links).id(d=>d.id).distance(60))
+    .force('charge',d3.forceManyBody().strength(-220))
+    .force('center',d3.forceCenter(window.innerWidth*0.4,window.innerHeight*0.45));
+  const link = gg.append('g').attr('stroke','#26262a').selectAll('line').data(links).join('line');
+  const node = gg.append('g').selectAll('g').data(nodes).join('g')
+    .call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
+      .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
+  node.append('circle').attr('r',d=>d.kind==='branch'?9:5).attr('fill',d=>col[d.kind]||'#888').attr('stroke','#000');
+  node.append('text').attr('x',8).attr('y',3).text(d=>d.label);
+  sim.on('tick',()=>{ link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+    .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    node.attr('transform',d=>`translate(${d.x},${d.y})`); });
+}
+
+async function renderBranches(){
+  const d = await api('/api/branches');
+  hdr.textContent = 'branch: ' + d.current + ' · default: ' + d.default;
+  view.innerHTML = d.branches.map(b=>`<div class="brow">
+    <div><b>${esc(b.name)}</b> <span class="hint">${b.creator?('· by '+esc(b.creator)):''}</span></div>
+    <div class="${b.status==='merged'?'merged':''}">${esc(b.status)}${b.into_branch?(' → '+esc(b.into_branch)):''}</div>
+  </div>`).join('') || '<span class="hint">no branches</span>';
+}
+
+(async()=>{ render('memory'); })();
+</script>
+</body></html>
