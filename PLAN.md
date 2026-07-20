@@ -178,6 +178,57 @@ localhost (works offline; ships pre-built in the wheel).
 
 ---
 
+## 7a. Knowledge-base format — the north star (modeled on real usage)
+
+OmniMemory's job is to **auto-generate and maintain** the kind of AI knowledge
+base a senior dev builds by hand. Reference: `Documents/work/docs` (a real
+multi-repo BFHL platform kb). We mirror its proven shape:
+
+- **Indexed with a reading order** — `MEMORY.md` opens with architecture →
+  concepts → flows → events → api-map → db → components, then running notes.
+- **Kinds mapped to that taxonomy:** `decision · concept · flow · event (kafka
+  contract) · endpoint (controller→service→repo+params) · db · component ·
+  gotcha/known-issue · assumption (verify) · todo · fact`.
+- **Confidence markers** — `EXTRACTED / INFERRED / ASSUMPTION` (graphify labels +
+  their TODO/ASSUMPTION/Inferred convention).
+- **Two killer auto-generated artifacts (P1/P2, from the AST graph + runtime):**
+  - **api-map** — every endpoint → controller → service → repo/downstream with
+    DTOs/params/headers (replaces hand-written `api-map.md`).
+  - **linkup** — the master cross-reference: Mermaid repo-dependency graph,
+    controller→service→repo maps, Kafka producer/consumer contracts, shared
+    DBs/code (replaces hand-written `linkup.md`).
+- **Multi-repo aware** — one memory/graph spanning sibling repos (graphify
+  `global_graph`), because real systems are many repos.
+- **Mermaid** for dependency/flow diagrams in the dashboard + digest.
+
+## 7b. Autonomy & persistence — why this beats other memory tools
+
+The failure of every memory tool is that **updating** the memory is left to the
+agent's goodwill — and agents forget. OmniMemory's rule: **never rely on the
+agent to remember to update.** Capture fires from deterministic *harness events*,
+and retrieval is always-on.
+
+**Claude Code (hooks = harness-run, not agent-run):**
+- `UserPromptSubmit` → `omni-memory inject` (always injects verified memory).
+- `SessionEnd` / `Stop` → `omni-memory capture` (extracts from transcript+diff
+  via a small model, deterministically — no agent decision needed).
+- `PostToolUse(Edit|Write)` → mark graph stale / incremental re-map.
+- The skill + `MEMORY.md` digest are always available for @-reference.
+
+**Antigravity (artifacts = always-in-context knowledge):**
+- Write the `MEMORY.md` digest as a persistent **artifact** so it's always
+  loaded into context (no re-fetch).
+- Register OmniMemory as an **MCP server** for deep recall + capture tools.
+- Capture on task-complete events where available; else a cadence + the
+  staleness nudge below.
+
+**Staleness watchdog (the "keep reminding to update" fix):** the store tracks
+`last_capture` + commits since. If stale, the injected block **prepends a
+directive** ("⚠ memory N commits stale — capturing now") and the hook runs
+capture. Automation is the fix; the nudge is only the fallback. Result: the
+knowledge base updates itself as you work, across branches, without you or the
+agent having to remember.
+
 ## 8. Repo structure
 
 ```

@@ -3,6 +3,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OmniMemory</title>
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <style>
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:#0b0b0c;color:#d6d6d8;
@@ -30,12 +32,22 @@
     background:#0e0e10;display:flex;justify-content:space-between;gap:12px}
   .brow b{color:#eee}
   .merged{color:#7c7c82}
+  .md{max-width:900px;color:#cfcfd2}
+  .md h1,.md h2,.md h3{color:#eee;border-bottom:1px solid #1c1c1f;padding-bottom:4px;margin-top:24px}
+  .md table{border-collapse:collapse;width:100%;margin:12px 0;font-size:12px}
+  .md th,.md td{border:1px solid #23232a;padding:6px 8px;text-align:left;vertical-align:top}
+  .md th{background:#141416;color:#c9c9cd}
+  .md code{background:#141416;border:1px solid #23232a;border-radius:4px;padding:1px 5px;font-size:12px}
+  .md pre{background:#0e0e10;border:1px solid #1c1c1f;border-radius:8px;padding:12px;overflow:auto}
+  .md pre code{border:none;background:none}
+  .md a{color:#9db}.md svg{max-width:100%;background:#0e0e10;border:1px solid #1c1c1f;border-radius:8px}
 </style></head>
 <body>
 <div id="app">
   <nav>
     <h1>◇ OmniMemory</h1>
     <a data-tab="memory" class="on">Memory</a>
+    <a data-tab="docs">Docs</a>
     <a data-tab="graph">Graph</a>
     <a data-tab="branches">Repo Graph</a>
   </nav>
@@ -56,9 +68,38 @@ document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{
 
 async function render(tab){
   view.innerHTML = '<span class="hint">loading…</span>';
-  if(tab==='memory') return renderMemory();
-  if(tab==='graph') return renderGraph();
-  if(tab==='branches') return renderBranches();
+  try {
+    if(tab==='memory') return await renderMemory();
+    if(tab==='docs') return await renderDocs();
+    if(tab==='graph') return await renderGraph();
+    if(tab==='branches') return await renderBranches();
+  } catch(e){
+    view.innerHTML = '<span class="hint">render error in <b>'+esc(tab)+'</b>: '+esc(e.message)+
+      '<br>(open the browser console for the stack trace)</span>';
+    console.error(e);
+  }
+}
+
+let mermaidInit=false;
+async function renderDocs(){
+  const docs = await api('/api/docs');
+  hdr.textContent = 'AI-written docs';
+  view.innerHTML = '<div id="docnav" style="margin-bottom:14px"></div><div id="docbody"></div>';
+  const nav = document.getElementById('docnav');
+  nav.innerHTML = docs.map(d=>`<span class="chip" data-doc="${d.name}" style="cursor:${d.exists?'pointer':'default'};opacity:${d.exists?1:.4}">${d.name.replace('.md','')}</span>`).join(' ');
+  const show = async name => {
+    const md = await (await fetch('/api/doc?name='+encodeURIComponent(name))).text();
+    const body = document.getElementById('docbody');
+    body.className = 'md';
+    body.innerHTML = window.marked ? marked.parse(md) : '<pre>'+esc(md)+'</pre>';
+    if(window.mermaid){ if(!mermaidInit){mermaid.initialize({startOnLoad:false,theme:'dark'});mermaidInit=true;}
+      body.querySelectorAll('code.language-mermaid').forEach(async(el,i)=>{
+        try{ const {svg}=await mermaid.render('mm'+Date.now()+i, el.textContent); el.parentElement.outerHTML=svg; }catch(e){}
+      }); }
+  };
+  nav.querySelectorAll('[data-doc]').forEach(c=>{ if(docs.find(d=>d.name===c.dataset.doc&&d.exists)) c.onclick=()=>show(c.dataset.doc); });
+  const first = docs.find(d=>d.exists);
+  if(first) show(first.name); else document.getElementById('docbody').innerHTML='<span class="hint">No docs yet — run <code>omni-memory build</code> (with a model key) or <code>omni-memory artifact all</code>.</span>';
 }
 
 async function renderMemory(){
@@ -77,35 +118,105 @@ async function renderMemory(){
 }
 
 async function renderGraph(){
-  const g = await api('/api/graph');
-  hdr.textContent = g.nodes.length + ' nodes · ' + g.edges.length + ' links';
+  if(!window.d3){ view.innerHTML='<span class="hint">graph needs d3 (blocked/offline CDN). Connect once to load '+
+    '<code>cdn.jsdelivr.net/npm/d3</code>, or use Memory/Docs tabs offline.</span>'; return; }
+  let g; try{ g = await api('/api/graph'); }
+  catch(e){ view.innerHTML='<span class="hint">graph API failed: '+esc(e.message)+'</span>'; return; }
+
+  const ids = new Set(g.nodes.map(n=>n.id));
+  const nodes = g.nodes.map(d=>({...d}));
+  // Drop links whose endpoints aren't in the node set — d3.forceLink THROWS on
+  // a missing id and aborts the whole render (that was the "blank graph" bug).
+  const links = g.edges.filter(e=>ids.has(e.from)&&ids.has(e.to))
+                       .map(e=>({source:e.from,target:e.to,rel:e.rel}));
+  hdr.textContent = nodes.length + ' nodes · ' + links.length + ' links · scroll to zoom, drag nodes, hover to focus';
+  if(!nodes.length){ view.innerHTML='<span class="hint">graph is empty — run <code>omni-memory build</code> or <code>omni-memory map</code>.</span>'; return; }
   view.innerHTML = '<svg id="g"></svg>';
-  const nodes = g.nodes.map(d=>({...d})), links = g.edges.map(e=>({source:e.from,target:e.to}));
+
   const svg = d3.select('#g'), gg = svg.append('g');
-  svg.call(d3.zoom().scaleExtent([.2,4]).on('zoom',e=>gg.attr('transform',e.transform)));
-  const col = {branch:'#eee',memory:'#9aa',file:'#77787c'};
+  const W = svg.node().clientWidth || window.innerWidth, H = svg.node().clientHeight || window.innerHeight;
+  svg.call(d3.zoom().scaleExtent([.08,4]).on('zoom',e=>gg.attr('transform',e.transform)));
+  const col = {branch:'#e8e8ea', memory:'#8f9199', file:'#5f6066'};
+
+  // node size by connectivity so hubs read as hubs
+  const deg = {}; links.forEach(l=>{deg[l.source]=(deg[l.source]||0)+1; deg[l.target]=(deg[l.target]||0)+1;});
+  const rOf = d => d.kind==='branch' ? 12 : d.kind==='file' ? 5 : 6+Math.min(7,(deg[d.id]||0));
+  const short = s => { s=''+s; return s.length>28 ? s.slice(0,27)+'…' : s; };
+
+  // SPACIOUS layout: strong repulsion + long links + a big collision bubble so
+  // interconnected nodes get real breathing room instead of clumping.
   const sim = d3.forceSimulation(nodes)
-    .force('link',d3.forceLink(links).id(d=>d.id).distance(60))
-    .force('charge',d3.forceManyBody().strength(-220))
-    .force('center',d3.forceCenter(window.innerWidth*0.4,window.innerHeight*0.45));
-  const link = gg.append('g').attr('stroke','#26262a').selectAll('line').data(links).join('line');
-  const node = gg.append('g').selectAll('g').data(nodes).join('g')
+    .force('link', d3.forceLink(links).id(d=>d.id)
+                     .distance(l=>l.rel==='remembers'?90:150).strength(.2))
+    .force('charge', d3.forceManyBody().strength(-900).distanceMax(1200))
+    .force('collide', d3.forceCollide().radius(d=>rOf(d)+62).iterations(2))
+    .force('x', d3.forceX(W/2).strength(.03))
+    .force('y', d3.forceY(H/2).strength(.03));
+
+  const link = gg.append('g').attr('stroke','#2b2b31').attr('stroke-width',.9)
+    .selectAll('line').data(links).join('line');
+  const node = gg.append('g').selectAll('g').data(nodes).join('g').style('cursor','pointer')
     .call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
       .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
-  node.append('circle').attr('r',d=>d.kind==='branch'?9:5).attr('fill',d=>col[d.kind]||'#888').attr('stroke','#000');
-  node.append('text').attr('x',8).attr('y',3).text(d=>d.label);
+  node.append('circle').attr('r',rOf).attr('fill',d=>col[d.kind]||'#888')
+    .attr('stroke','#0b0b0c').attr('stroke-width',1.5);
+  node.append('title').text(d=>d.label);                 // full text on hover
+  node.append('text').attr('x',d=>rOf(d)+5).attr('y',3).text(d=>short(d.label))
+    .attr('fill',d=>d.kind==='branch'?'#dcdce0':'#83848a').style('pointer-events','none');
+
+  // hover: spotlight a node + its direct neighbours, fade the rest
+  const adj = {}; links.forEach(l=>{const a=l.source.id||l.source,b=l.target.id||l.target;
+    (adj[a]=adj[a]||new Set()).add(b); (adj[b]=adj[b]||new Set()).add(a);});
+  node.on('mouseenter',(e,d)=>{ const keep=new Set(adj[d.id]||[]); keep.add(d.id);
+      node.style('opacity',n=>keep.has(n.id)?1:.12);
+      link.style('stroke-opacity',l=>(l.source.id===d.id||l.target.id===d.id)?.95:.04); })
+    .on('mouseleave',()=>{ node.style('opacity',1); link.style('stroke-opacity',1); });
+
   sim.on('tick',()=>{ link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
-    .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+      .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
     node.attr('transform',d=>`translate(${d.x},${d.y})`); });
+
+  // once it settles, zoom-to-fit so the (now spread-out) graph is fully visible
+  sim.on('end',()=>{
+    const xs=nodes.map(n=>n.x), ys=nodes.map(n=>n.y);
+    const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+    const gw=(x1-x0)||1, gh=(y1-y0)||1, pad=240;   // room for labels extending right
+    const k=Math.min(3,Math.max(.1,Math.min((W-pad)/gw,(H-pad)/gh)));
+    const tx=W/2-k*(x0+x1)/2, ty=H/2-k*(y0+y1)/2;
+    svg.transition().duration(500).call(d3.zoom().on('zoom',ev=>gg.attr('transform',ev.transform)).transform,
+      d3.zoomIdentity.translate(tx,ty).scale(k));
+  });
 }
 
 async function renderBranches(){
   const d = await api('/api/branches');
   hdr.textContent = 'branch: ' + d.current + ' · default: ' + d.default;
-  view.innerHTML = d.branches.map(b=>`<div class="brow">
-    <div><b>${esc(b.name)}</b> <span class="hint">${b.creator?('· by '+esc(b.creator)):''}</span></div>
-    <div class="${b.status==='merged'?'merged':''}">${esc(b.status)}${b.into_branch?(' → '+esc(b.into_branch)):''}</div>
-  </div>`).join('') || '<span class="hint">no branches</span>';
+  const branches = d.branches || [];
+  if(!branches.length){ view.innerHTML='<span class="hint">no branches recorded yet — run <code>omni-memory branches</code> or work in a git repo.</span>'; return; }
+
+  // ── git-DAG lane diagram: default branch is the spine, others diverge ──
+  const def = d.default, rowH = 54, x0 = 40, laneW = 26;
+  const ordered = [...branches].sort((a,b)=> (a.name===def?-1:b.name===def?1:(a.created_at||0)-(b.created_at||0)));
+  const yOf = {}; ordered.forEach((b,i)=>yOf[b.name]=30+i*rowH);
+  const H = 30 + ordered.length*rowH + 20, Wsvg = 900;
+  const P=[]; // svg pieces
+  P.push(`<line x1="${x0}" y1="${yOf[def]||30}" x2="${x0}" y2="${H-20}" stroke="#3a3a42" stroke-width="2"/>`);
+  ordered.forEach(b=>{
+    const y=yOf[b.name], lane = b.name===def?0:1, cx=x0+lane*laneW;
+    const baseY = (b.base_branch && yOf[b.base_branch]!=null)?yOf[b.base_branch]:yOf[def];
+    if(b.name!==def){ // diverge curve from base spine to this branch node
+      P.push(`<path d="M ${x0} ${baseY} C ${x0+laneW} ${baseY}, ${cx} ${y-20}, ${cx} ${y}" fill="none" stroke="#33333b" stroke-width="1.6"/>`);
+      if(b.status==='merged'){ const my=yOf[b.into_branch]!=null?yOf[b.into_branch]:yOf[def];
+        P.push(`<path d="M ${cx} ${y} C ${cx} ${y+18}, ${x0+laneW} ${my}, ${x0} ${my}" fill="none" stroke="#2c2c33" stroke-width="1.4" stroke-dasharray="3 3"/>`); }
+    }
+    const on = b.name===d.current;
+    P.push(`<circle cx="${cx}" cy="${y}" r="${on?7:5.5}" fill="${on?'#f0f0f2':(b.status==='merged'?'#5f6066':'#a9a9af')}" stroke="#0b0b0c" stroke-width="2"/>`);
+    const meta=[b.creator?('by '+esc(b.creator)):'', b.status, b.status==='merged'&&b.into_branch?('→ '+esc(b.into_branch)):'',
+      (b.ahead||b.behind)?`(↑${b.ahead||0} ↓${b.behind||0})`:''].filter(Boolean).join('  ·  ');
+    P.push(`<text x="${cx+16}" y="${y-2}" fill="${on?'#f0f0f2':'#d0d0d4'}" font-weight="600">${esc(b.name)}${on?'  ◀ HEAD':''}</text>`);
+    P.push(`<text x="${cx+16}" y="${y+13}" fill="#6c6c72" font-size="10">${meta}</text>`);
+  });
+  view.innerHTML = `<svg viewBox="0 0 ${Wsvg} ${H}" style="height:${H}px;max-width:${Wsvg}px">${P.join('')}</svg>`;
 }
 
 (async()=>{ render('memory'); })();

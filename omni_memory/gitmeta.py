@@ -72,6 +72,9 @@ def ahead_behind(root: Path, branch: str, base: str) -> tuple[int, int]:
 
 def merge_info(root: Path, branch: str, into: str) -> tuple[bool, str, float]:
     """Is `branch` merged into `into`? Returns (merged, merge_commit, when)."""
+    # a branch sitting on the same commit as base isn't "merged", just fresh
+    if _git(root, "rev-parse", branch) == _git(root, "rev-parse", into):
+        return False, "", 0.0
     merged_list = _git(root, "branch", "--merged", into).splitlines()
     merged = any(b.strip().lstrip("* ").strip() == branch for b in merged_list)
     if not merged:

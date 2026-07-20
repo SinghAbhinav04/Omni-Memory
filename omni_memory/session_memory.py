@@ -15,13 +15,32 @@ from typing import Optional
 from . import gitmeta
 from .store import KINDS, Memory, Store
 
-EXTRACTION_PROMPT = """\
+_KINDS_LINE = ("decision|concept|flow|event|endpoint|db|component|"
+               "gotcha|assumption|todo|fact")
+
+# Prompt the SessionEnd hook hands to the model to extract memory from a session.
+EXTRACTION_PROMPT = f"""\
 You are OmniMemory's extractor. From the conversation + git diff below, extract
-durable project memory that a future coding session MUST know. Output ONLY a JSON
-array; each item: {"kind": one of decision|fact|flow|gotcha|todo|api|db|endpoint,
-"text": one concise sentence, "files": [paths], "symbols": [names]}.
-Rules: capture DECISIONS (and why), non-obvious FACTS, request/data FLOWS,
-GOTCHAs, and TODOs. Skip anything obvious from the code itself. No prose, JSON only.
+durable project memory a FUTURE coding session must know. Output ONLY a JSON
+array; each item: {{"kind": one of {_KINDS_LINE}, "text": one concise sentence,
+"files": [paths], "symbols": [names]}}.
+Capture: DECISIONS (and why), request/data FLOWS, event/Kafka CONTRACTs, ENDPOINT
+maps (controller->service->repo + key params), DB schema facts, reusable
+COMPONENTs, GOTCHAs, and TODOs. Mark uncertain items kind="assumption".
+Skip anything trivially obvious from the code. No prose — JSON only.
+"""
+
+# Prompt for the one-time `omni-memory build`: seed memory from the whole repo.
+BUILD_PROMPT = f"""\
+You are OmniMemory doing a ONE-TIME bootstrap of this repository. Study the code,
+config, and any docs, then output ONLY a JSON array of durable project memories:
+{{"kind": one of {_KINDS_LINE}, "text": one concise sentence, "files": [paths],
+"symbols": [names]}}.
+Prioritize, in order: (1) system ARCHITECTURE & key DECISIONs, (2) domain CONCEPTs,
+(3) end-to-end FLOWs, (4) event/Kafka CONTRACTs, (5) ENDPOINT map
+(path -> controller -> service -> repo/downstream + DTOs/params), (6) DB schema,
+(7) reusable COMPONENTs, (8) GOTCHAs/known issues. Mark inferred items
+kind="assumption". Be specific (real names, paths, topics). No prose — JSON only.
 """
 
 
@@ -49,13 +68,27 @@ def remember_many(store: Store, root: Path, items: list[dict], source: str = "se
 
 
 def capture_from_json(store: Store, root: Path, raw: str, source: str = "session") -> int:
-    """Ingest the agent's extraction output (a JSON array of memory items)."""
+    """Ingest memory from the agent's JSON, or extract it from a raw transcript.
+
+    Order: (1) already-JSON → ingest; (2) a model is configured → semantic
+    extraction via EXTRACTION_PROMPT (autonomous, headless); (3) heuristic.
+    """
+    from . import llm
     try:
         items = json.loads(raw)
         if isinstance(items, dict):
             items = items.get("memories") or items.get("items") or []
+        if not isinstance(items, list):
+            raise ValueError
     except Exception:  # noqa: BLE001
-        items = _heuristic_extract(raw)
+        if llm.available():
+            try:
+                items = llm.extract_memories(EXTRACTION_PROMPT, raw[:140_000])
+                source = "ai-session"
+            except Exception:  # noqa: BLE001
+                items = _heuristic_extract(raw)
+        else:
+            items = _heuristic_extract(raw)
     return remember_many(store, root, items, source=source)
 
 
@@ -67,6 +100,29 @@ _PATTERNS = [
     (r"\b(endpoint|route|/api/|GET |POST |PUT |DELETE )\b", "endpoint"),
     (r"\b(table|column|schema|migration|kafka|queue|publish(?:es)?)\b", "flow"),
 ]
+
+
+_SKIP_DIRS = {"node_modules", ".git", ".omni-memory", "dist", "build",
+              "__pycache__", ".venv", "venv", "target"}
+
+
+def ingest_docs(store: Store, root: Path, max_files: int = 300) -> tuple[int, int]:
+    """Seed memory from existing markdown docs (their kb) via the heuristic pass.
+    Returns (memories_added, docs_scanned)."""
+    docs = [p for p in root.rglob("*.md")
+            if not (_SKIP_DIRS & set(p.parts))]
+    added = 0
+    for f in docs[:max_files]:
+        try:
+            text = f.read_text(errors="ignore")
+        except Exception:  # noqa: BLE001
+            continue
+        rel = str(f.relative_to(root))
+        items = _heuristic_extract(text)
+        for it in items:
+            it.setdefault("files", []).append(rel)
+        added += remember_many(store, root, items, source="doc")
+    return added, len(docs)
 
 
 def _heuristic_extract(text: str) -> list[dict]:

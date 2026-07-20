@@ -30,7 +30,12 @@ def store_dir(root: Optional[Path] = None) -> Path:
     return d
 
 
-KINDS = ("decision", "fact", "flow", "gotcha", "todo", "api", "db", "endpoint")
+# Kinds modeled on a real, battle-tested AI knowledge base (work/docs):
+# architecture/decisions, domain concepts, execution flows, event contracts
+# (kafka), endpoint maps (controller→service→repo+params), db schema, reusable
+# components, gotchas/known-issues, unverified assumptions, todos, plain facts.
+KINDS = ("decision", "concept", "flow", "event", "endpoint", "db",
+         "component", "gotcha", "assumption", "todo", "fact")
 STATUSES = ("active", "merged", "abandoned", "superseded")
 
 
@@ -79,7 +84,9 @@ CREATE INDEX IF NOT EXISTS idx_mem_status ON memory(status);
 class Store:
     def __init__(self, root: Optional[Path] = None):
         self.dir = store_dir(root)
-        self.db = sqlite3.connect(self.dir / "omni.db")
+        # check_same_thread=False: the dashboard server handles requests on
+        # worker threads but shares one read-mostly connection.
+        self.db = sqlite3.connect(self.dir / "omni.db", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
         self.db.commit()
@@ -123,6 +130,10 @@ class Store:
     def memories(self, branch: Optional[str] = None, base: Optional[str] = None,
                  kinds: Optional[list[str]] = None, files: Optional[list[str]] = None,
                  status: str = "active", query: str = "", limit: int = 200) -> list[dict]:
+        # Scope in SQL (branch/status/kind); rank relevance in Python. We no
+        # longer filter by `LIKE` per token — that required *every* term to be
+        # present and then sorted by recency. Instead fetch the scoped candidate
+        # set and let rank.py score it (IDF tiers + coverage + file/recency).
         sql = "SELECT * FROM memory WHERE 1=1"
         args: list[Any] = []
         if status:
@@ -135,16 +146,12 @@ class Store:
         if kinds:
             sql += f" AND kind IN ({','.join('?' * len(kinds))})"
             args += kinds
-        if query:
-            sql += " AND text LIKE ?"
-            args.append(f"%{query}%")
-        sql += " ORDER BY updated DESC LIMIT ?"
-        args.append(limit)
+        sql += " ORDER BY updated DESC"
         rows = [self._row_to_mem(r) for r in self.db.execute(sql, args).fetchall()]
-        if files:
-            fset = set(files)
-            rows = [m for m in rows if fset & set(m["files"])] or rows
-        return rows
+        if query or files:
+            from . import rank as _rank
+            rows = _rank.rank(rows, query, files=files)
+        return rows[:limit]
 
     def forget(self, mem_id: str) -> bool:
         cur = self.db.execute("UPDATE memory SET status='abandoned',updated=? WHERE id=?",

@@ -57,6 +57,16 @@ def _handler(store: Store, root: Path):
                     "default": store.get_meta("default_branch", "main")}))
             if u.path == "/api/commits":
                 return self._send(200, json.dumps(store.commits()))
+            if u.path == "/api/docs":
+                docs = [{"name": n, "exists": (store.dir / n).exists()}
+                        for n in ("MEMORY.md", "api-map.md", "linkup.md")]
+                return self._send(200, json.dumps(docs))
+            if u.path == "/api/doc":
+                name = q.get("name", [""])[0]
+                f = store.dir / name
+                if name in ("MEMORY.md", "api-map.md", "linkup.md") and f.exists():
+                    return self._send(200, f.read_text(), "text/plain; charset=utf-8")
+                return self._send(404, "not found", "text/plain")
             return self._send(404, json.dumps({"error": "not found"}))
 
     return H

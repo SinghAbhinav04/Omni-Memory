@@ -24,6 +24,21 @@ omni-memory forget <id>       # archive a stale memory
 omni-memory install           # wire hooks + skill into this agent
 ```
 
+## Agent-driven extraction (runs INSIDE this agent — no API key)
+OmniMemory prefers to let *you, the agent* do the thinking; it just stores the
+result. No external model key is required.
+
+- **`/omni-memory build`** (one-time bootstrap): run `omni-memory prompt build`
+  to get the instructions, study the repo yourself, and pipe your JSON output to
+  `omni-memory capture`. Example:
+  `omni-memory prompt build` → (you analyze the code) → `echo '<your JSON>' | omni-memory capture`.
+  Then `omni-memory artifact all` for the api-map/linkup docs (or you write them).
+- **End of a task:** run `omni-memory prompt session`, extract the durable
+  memories from what just happened, and `echo '<JSON>' | omni-memory capture`.
+
+Headless (SessionEnd hook) uses the `claude -p` CLI or an optional API key
+(`omni-memory key anthropic`) so capture still fires when no agent is present.
+
 ## How to use it in a session
 1. **Start of a task:** run `omni-memory inject "<the user's request>"` and treat
    the returned **VERIFIED PROJECT MEMORY** block as ground truth — cite the
