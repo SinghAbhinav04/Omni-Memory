@@ -2,7 +2,8 @@ name: Publish to PyPI
 
 # Publishes the package whenever you push a version tag (e.g. `v0.1.0`).
 # Uses PyPI Trusted Publishing (OIDC) — no API token or secret to store.
-# One-time setup on PyPI: create the project's "trusted publisher" pointing at
+# One-time setup on PyPI: create the "trusted publisher" for project
+# `omni-memory-agent` pointing at
 #   owner=SinghAbhinav04  repo=Omni-Memory  workflow=publish.yml  environment=pypi
 # (https://docs.pypi.org/trusted-publishers/)
 

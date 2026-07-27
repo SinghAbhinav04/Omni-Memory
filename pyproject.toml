@@ -1,5 +1,5 @@
 [project]
-name = "omni-memory"
+name = "omni-memory-agent"
 version = "0.1.0"
 description = "Persistent, branch-aware, git-anchored memory & context layer for coding agents."
 readme = "README.md"

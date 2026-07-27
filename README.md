@@ -23,8 +23,8 @@ injects on every prompt and updates itself when a session ends.
 **Option B — pip (gives you the `omni-memory` CLI everywhere).**
 
 ```bash
-pip install omni-memory            # or, from a clone: python -m pip install -e .
-omni-memory install                # wire it into Claude Code
+pip install omni-memory-agent      # or, from a clone: python -m pip install -e .
+omni-memory install                # wire it into Claude Code (the CLI is `omni-memory`)
 omni-memory build                  # one-time: seed memory from the repo (optional)
 omni-memory status
 ```
