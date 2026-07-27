@@ -267,9 +267,22 @@ def cmd_hook(args):
         text = _read_transcript(data.get("transcript_path"))
         if text:
             n = sm.capture_from_json(s, root, text, source="session")
+            # citation feedback: lift memories the agent actually cited [id]
+            ids = {r["id"] for r in s.db.execute(
+                "SELECT id FROM memory WHERE status='active'")}
+            bumped = s.bump_uses(sm.extract_citations(text, ids))
             digest.write_digest(s)
-            print(f"omni-memory: captured {n} memories", file=sys.stderr)
+            print(f"omni-memory: captured {n} memories, +{bumped} citations",
+                  file=sys.stderr)
         return 0
+    return 0
+
+
+def cmd_used(args):
+    """Record that memories were used/cited (feeds the relevance ranker)."""
+    s, _ = _store()
+    n = s.bump_uses(args.id)
+    print(f"[+] recorded use of {n} memory")
     return 0
 
 
@@ -325,6 +338,7 @@ def main(argv=None):
     rc = sub.add_parser("recall"); rc.add_argument("query", nargs="+")
     sub.add_parser("branches")
     fg = sub.add_parser("forget"); fg.add_argument("id")
+    us = sub.add_parser("used"); us.add_argument("id", nargs="+")
     sub.add_parser("map")
     sub.add_parser("check")
     sub.add_parser("digest")
@@ -345,7 +359,8 @@ def main(argv=None):
         None: cmd_status, "status": cmd_status, "on": cmd_toggle, "off": cmd_toggle,
         "branch-aware": cmd_branch_aware, "remember": cmd_remember, "capture": cmd_capture,
         "inject": cmd_inject, "recall": cmd_recall, "branches": cmd_branches,
-        "forget": cmd_forget, "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
+        "forget": cmd_forget, "used": cmd_used, "map": cmd_map, "check": cmd_check,
+        "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,
     }

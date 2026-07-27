@@ -1,14 +1,17 @@
 """Relevance ranking for memory retrieval — zero-dep, pure Python + math.
 
-The old path filtered with SQL `LIKE` and required *every* query token to be
-present, then sorted by recency. That buries a memory that matches 2 of 3 terms
-and lets stale-but-recent noise win. This replaces it with an IDF-weighted,
-tiered scorer:
+Scores a candidate memory against a query, the files/symbols in play, and how
+useful the memory has proven before:
 
-  score = (Σ per-term tier·IDF) · coverage²        # relevance core
-        + full-query bonus                          # multi-word phrase match
-        + file/symbol overlap boost                 # anchored to current work
-        × recency · kind-weight · confidence        # memory-specific signals
+  BM25F lexical core   — per-field term matching (symbols ≫ files > text > kind),
+                         tf saturation + length normalization, weighted by IDF
+  · coverage²          — matching many query terms beats a lone generic hit
+  + full-phrase bonus  — multi-word phrase match
+  + file-in-play boost — memory anchored to a file you're editing
+  + graph proximity    — memory anchored to a symbol near your edit (call graph)
+  × recency            — exponential half-life
+  × kind · confidence  — durable kinds and confident facts rank up
+  × usage              — memories the agent actually cites float up over time
 
 No external search dependency.
 """
@@ -19,13 +22,20 @@ import re
 import time
 from typing import Optional
 
-# Match tiers: exact ≫ prefix > substring, taken strongest-per-term.
-_EXACT, _PREFIX, _SUBSTR = 10.0, 3.0, 1.0
+# BM25F field weights: a query term matching a symbol name is far stronger signal
+# than one buried in prose.
+_FIELD_W = {"symbols": 3.0, "files": 2.0, "text": 1.0, "kind": 0.5}
+# Relative match quality within a field: exact ≫ prefix > substring.
+_EXACT, _PREFIX, _SUBSTR = 1.0, 0.45, 0.15
+_K1 = 1.2          # tf saturation
+_B = 0.30          # length-normalization strength (mild — memories are short)
+
 _FULLQ_EXACT, _FULLQ_PREFIX = 6.0, 2.0
 _FILE_BOOST = 4.0            # memory anchored to a file in play right now
-_HALF_LIFE_DAYS = 45.0      # recency decay: a memory is worth ~½ after this
+_GRAPH_BOOST = 5.0          # memory anchored to a symbol near the current edit
+_USE_W = 0.30               # how much citation history lifts a memory
+_HALF_LIFE_DAYS = 45.0
 
-# Durable, high-signal kinds get a nudge up; speculative ones a nudge down.
 _KIND_WEIGHT = {
     "decision": 1.25, "gotcha": 1.2, "event": 1.15, "endpoint": 1.15,
     "db": 1.1, "flow": 1.1, "component": 1.05, "concept": 1.05,
@@ -45,12 +55,16 @@ def tokens(text: str) -> list[str]:
             if len(t) > 1 and t not in _STOP]
 
 
+def _fields(m: dict) -> dict[str, str]:
+    return {"symbols": " ".join(m.get("symbols") or []),
+            "files": " ".join(m.get("files") or []),
+            "text": m.get("text", ""),
+            "kind": m.get("kind", "")}
+
+
 def _mem_text(m: dict) -> str:
-    """Everything a query can legitimately match against for one memory."""
-    parts = [m.get("text", ""), m.get("kind", "")]
-    parts += m.get("files", []) or []
-    parts += m.get("symbols", []) or []
-    return " ".join(parts)
+    f = _fields(m)
+    return " ".join(f.values())
 
 
 def _idf(corpus_tokens: list[list[str]], terms: list[str]) -> dict[str, float]:
@@ -64,67 +78,99 @@ def _idf(corpus_tokens: list[list[str]], terms: list[str]) -> dict[str, float]:
     return {t: math.log(1 + n / (1 + df.get(t, 0))) for t in terms}
 
 
-def _term_score(term: str, w: float, mtoks: set[str], mtext: str) -> tuple[float, bool]:
-    """Strongest tier for one query term against one memory. Returns (score, matched)."""
-    if term in mtoks:
-        return _EXACT * w, True
-    for mt in mtoks:                      # prefix: query term begins a memory token
-        if mt.startswith(term) or term.startswith(mt):
-            return _PREFIX * w, True
-    if term in mtext:                     # loose substring fallback
-        return _SUBSTR * w, True
-    return 0.0, False
+def _field_tier(term: str, ftoks: set, ftext: str) -> float:
+    """Best relative match quality for one term against one field."""
+    if term in ftoks:
+        return _EXACT
+    for t in ftoks:
+        if t.startswith(term) or term.startswith(t):
+            return _PREFIX
+    if term in ftext:
+        return _SUBSTR
+    return 0.0
 
 
-def score_one(m: dict, terms: list[str], idf: dict[str, float],
-              joined: str, files: Optional[set[str]], now: float) -> float:
-    mtext = _mem_text(m).lower()
-    mtoks = set(tokens(mtext))
+def _saturate(x: float) -> float:
+    return x * (_K1 + 1) / (x + _K1) if x > 0 else 0.0
+
+
+def score_one(m: dict, terms: list[str], idf: dict, joined: str,
+              files: Optional[set], now: float, context: Optional[dict],
+              avg_len: float) -> float:
+    fields = _fields(m)
+    ftoks = {f: set(tokens(v)) for f, v in fields.items()}
+    ftext = {f: v.lower() for f, v in fields.items()}
+    dl = max(1, len(ftoks["text"]))
+    lengthnorm = 1.0 / (1 - _B + _B * dl / max(avg_len, 1.0))
+
     tiered, matched = 0.0, 0
     for t in terms:
-        s, hit = _term_score(t, idf.get(t, 1.0), mtoks, mtext)
-        tiered += s
-        matched += hit
-    if matched == 0 and not (files and files & set(m.get("files", []))):
+        raw = 0.0
+        for f, w in _FIELD_W.items():
+            q = _field_tier(t, ftoks[f], ftext[f])
+            if q:
+                raw += w * q * (lengthnorm if f == "text" else 1.0)
+        if raw > 0:
+            matched += 1
+            tiered += idf.get(t, 1.0) * _saturate(raw)
+
+    graph = 0.0
+    if context and m.get("symbols"):
+        graph = max((context.get(s, 0.0) for s in m["symbols"]), default=0.0)
+    file_hit = bool(files and files & set(m.get("files", [])))
+    if matched == 0 and not file_hit and graph == 0.0:
         return 0.0
-    # coverage²: matching many of the query's terms beats a lone generic hit.
+
     coverage = (matched / len(terms)) ** 2 if terms else 1.0
     score = tiered * coverage
 
-    if joined and len(terms) > 1:         # whole-phrase bonus, weighted by rarest term
+    if joined and len(terms) > 1:  # whole-phrase bonus, weighted by rarest term
         w = max((idf.get(t, 1.0) for t in terms), default=1.0)
-        if joined in mtext:
+        if joined in ftext["text"]:
             score += _FULLQ_EXACT * w
-        elif any(joined in x for x in (mtext,)):
+        elif any(joined in ftext[f] for f in ("symbols", "files")):
             score += _FULLQ_PREFIX * w
 
-    if files and files & set(m.get("files", [])):   # anchored to files in play
+    if file_hit:
         score += _FILE_BOOST
+    if graph:
+        score += _GRAPH_BOOST * graph
 
-    # recency (exponential half-life) · kind weight · stored confidence
     age_days = max(0.0, (now - float(m.get("updated") or now)) / 86400.0)
     recency = 0.5 ** (age_days / _HALF_LIFE_DAYS)
-    score *= (0.6 + 0.4 * recency)        # recency modulates, never zeroes
+    score *= (0.6 + 0.4 * recency)
     score *= _KIND_WEIGHT.get(m.get("kind", "fact"), 1.0)
     score *= 0.5 + 0.5 * float(m.get("confidence") or 0.8)
+    score *= 1.0 + _USE_W * math.log(1 + (m.get("uses") or 0))  # citation feedback
     return score
 
 
 def rank(mems: list[dict], query: str, files: Optional[list[str]] = None,
-         now: Optional[float] = None) -> list[dict]:
-    """Return memories ranked by relevance to `query` (+ files in play).
-
-    Memories that match nothing are dropped, so an injected block stays on-topic.
-    With no query, order by recency (graceful fallback for browse/digest paths).
-    """
+         now: Optional[float] = None, context: Optional[dict] = None) -> list[dict]:
+    """Return memories ranked by relevance to `query`, the files/symbols in play,
+    and citation history. Memories matching nothing are dropped when there's a
+    query; with no query, proximity + recency just reorder (nothing dropped)."""
     now = now or time.time()
     fileset = set(files) if files else None
     terms = list(dict.fromkeys(tokens(query)))
-    if not terms and not fileset:
-        return sorted(mems, key=lambda m: m.get("updated") or 0, reverse=True)
+
+    if not terms:  # browse/context path: reorder by proximity + recency, keep all
+        if not fileset and not context:
+            return sorted(mems, key=lambda m: m.get("updated") or 0, reverse=True)
+
+        def prox(m):
+            g = max((context.get(s, 0.0) for s in (m.get("symbols") or [])),
+                    default=0.0) if context else 0.0
+            fh = 1.0 if fileset and fileset & set(m.get("files", [])) else 0.0
+            return (_GRAPH_BOOST * g + _FILE_BOOST * fh, m.get("updated") or 0)
+        return sorted(mems, key=prox, reverse=True)
+
     joined = " ".join(terms)
     idf = _idf([tokens(_mem_text(m)) for m in mems], terms)
-    scored = [(score_one(m, terms, idf, joined, fileset, now), m) for m in mems]
+    text_lens = [len(tokens(m.get("text", ""))) for m in mems]
+    avg_len = (sum(text_lens) / len(text_lens)) if text_lens else 1.0
+    scored = [(score_one(m, terms, idf, joined, fileset, now, context, avg_len), m)
+              for m in mems]
     hits = [(s, m) for s, m in scored if s > 0]
     hits.sort(key=lambda sm: (sm[0], sm[1].get("updated") or 0), reverse=True)
     return [m for _, m in hits]

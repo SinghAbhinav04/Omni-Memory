@@ -44,6 +44,15 @@ kind="assumption". Be specific (real names, paths, topics). No prose — JSON on
 """
 
 
+_CITE = re.compile(r"\[([0-9a-f]{8,16})\]")
+
+
+def extract_citations(text: str, valid_ids: set) -> list[str]:
+    """Memory ids the agent cited in `text` (the enforce block asks for `[id]`s).
+    Only ids that exist are returned — this is the relevance-feedback signal."""
+    return [i for i in dict.fromkeys(_CITE.findall(text or "")) if i in valid_ids]
+
+
 def remember(store: Store, root: Path, text: str, kind: str = "fact",
              files: Optional[list[str]] = None, symbols: Optional[list[str]] = None,
              source: str = "manual") -> Memory:

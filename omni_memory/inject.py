@@ -6,11 +6,24 @@ cite what was used and to admit when something isn't in memory.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional
 
-from . import branch as branchmod
+from . import branch as branchmod, gitmeta
 from .store import Store
+
+_PATH_RE = re.compile(r"[\w./-]+\.[A-Za-z0-9]{1,5}")
+
+
+def _files_in_play(root: Path, query: str, files: Optional[list[str]]) -> list[str]:
+    """What the agent is working on: explicit files + file paths named in the
+    prompt + files with uncommitted changes. Drives graph-proximity ranking."""
+    fip = set(files or [])
+    fip.update(m for m in _PATH_RE.findall(query or "") if "/" in m or "." in m)
+    changed = gitmeta._git(root, "diff", "--name-only", "HEAD")
+    fip.update(ln.strip() for ln in changed.splitlines() if ln.strip())
+    return [f for f in fip if f]
 
 ENFORCE_RULES = (
     "RULES: (1) Treat the memory below as verified project truth — prefer it over "
@@ -26,8 +39,11 @@ def build_block(store: Store, root: Path, query: str = "",
                 files: Optional[list[str]] = None, limit: int = 20) -> str:
     cur, base = branchmod.scope(store, root)
     branch = None if cur == "*" else cur
-    mems = store.memories(branch=branch, base=base, files=files, query=query,
-                          limit=limit)
+    fip = _files_in_play(root, query, files)
+    from .graph import proximity
+    context = proximity.context_from_files(store, fip)
+    mems = store.memories(branch=branch, base=base, files=fip or None,
+                          query=query, context=context, limit=limit)
     if not mems and query:  # widen if the query filter was too tight
         mems = store.memories(branch=branch, base=base, limit=limit)
     if not mems:

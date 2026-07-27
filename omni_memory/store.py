@@ -105,7 +105,8 @@ class Store:
         EXISTS on ADD COLUMN, so check PRAGMA and add what's missing)."""
         have = {r["name"] for r in self.db.execute("PRAGMA table_info(memory)")}
         for col, decl in (("stale", "INTEGER DEFAULT 0"),
-                          ("stale_since", "REAL"), ("stale_files", "TEXT")):
+                          ("stale_since", "REAL"), ("stale_files", "TEXT"),
+                          ("uses", "INTEGER DEFAULT 0"), ("last_used", "REAL")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE memory ADD COLUMN {col} {decl}")
 
@@ -147,9 +148,21 @@ class Store:
                                 (time.time(), r["id"]))
                 m.supersedes_id = r["id"]
 
+    def bump_uses(self, ids: list[str]) -> int:
+        """Record that these memories were cited by the agent (relevance signal)."""
+        if not ids:
+            return 0
+        now = time.time()
+        cur = self.db.executemany(
+            "UPDATE memory SET uses=COALESCE(uses,0)+1, last_used=? WHERE id=?",
+            [(now, i) for i in ids])
+        self.db.commit()
+        return cur.rowcount
+
     def memories(self, branch: Optional[str] = None, base: Optional[str] = None,
                  kinds: Optional[list[str]] = None, files: Optional[list[str]] = None,
-                 status: str = "active", query: str = "", limit: int = 200) -> list[dict]:
+                 status: str = "active", query: str = "", limit: int = 200,
+                 context: Optional[dict] = None) -> list[dict]:
         # Scope in SQL (branch/status/kind); rank relevance in Python. We no
         # longer filter by `LIKE` per token — that required *every* term to be
         # present and then sorted by recency. Instead fetch the scoped candidate
@@ -168,9 +181,9 @@ class Store:
             args += kinds
         sql += " ORDER BY updated DESC"
         rows = [self._row_to_mem(r) for r in self.db.execute(sql, args).fetchall()]
-        if query or files:
+        if query or files or context:
             from . import rank as _rank
-            rows = _rank.rank(rows, query, files=files)
+            rows = _rank.rank(rows, query, files=files, context=context)
         return rows[:limit]
 
     def set_stale(self, mem_id: str, stale: bool, since: Optional[float],
@@ -202,6 +215,7 @@ class Store:
         d["symbols"] = json.loads(d["symbols"] or "[]")
         d["stale"] = bool(d.get("stale"))
         d["stale_files"] = json.loads(d.get("stale_files") or "[]")
+        d["uses"] = d.get("uses") or 0
         return d
 
     # -- code graph ---------------------------------------------------------
