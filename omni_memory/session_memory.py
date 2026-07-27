@@ -56,6 +56,8 @@ def remember(store: Store, root: Path, text: str, kind: str = "fact",
 
 
 def remember_many(store: Store, root: Path, items: list[dict], source: str = "session") -> int:
+    from . import cleanup
+    items, _dropped = cleanup.filter_items(items, source=source)
     n = 0
     for it in items:
         text = (it.get("text") or "").strip()

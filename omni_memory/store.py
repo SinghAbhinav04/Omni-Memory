@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS memory(
   id TEXT PRIMARY KEY, branch TEXT, kind TEXT, text TEXT,
   files TEXT, symbols TEXT, commit_range TEXT,
   created REAL, updated REAL, status TEXT, confidence REAL,
-  source TEXT, supersedes_id TEXT);
+  source TEXT, supersedes_id TEXT,
+  stale INTEGER DEFAULT 0, stale_since REAL, stale_files TEXT);
 CREATE TABLE IF NOT EXISTS branches(
   name TEXT PRIMARY KEY, creator TEXT, created_at REAL, base_branch TEXT,
   ahead INTEGER, behind INTEGER, status TEXT, merged_at REAL,
@@ -89,7 +90,17 @@ class Store:
         self.db = sqlite3.connect(self.dir / "omni.db", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        self._migrate()
         self.db.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after the first schema (SQLite lacks IF NOT
+        EXISTS on ADD COLUMN, so check PRAGMA and add what's missing)."""
+        have = {r["name"] for r in self.db.execute("PRAGMA table_info(memory)")}
+        for col, decl in (("stale", "INTEGER DEFAULT 0"),
+                          ("stale_since", "REAL"), ("stale_files", "TEXT")):
+            if col not in have:
+                self.db.execute(f"ALTER TABLE memory ADD COLUMN {col} {decl}")
 
     # -- meta / toggles -----------------------------------------------------
     def get_meta(self, key: str, default: Any = None) -> Any:
@@ -153,6 +164,17 @@ class Store:
             rows = _rank.rank(rows, query, files=files)
         return rows[:limit]
 
+    def set_stale(self, mem_id: str, stale: bool, since: Optional[float],
+                  files: Optional[list[str]]) -> None:
+        if since is None:  # keep the existing stale_since, just update flag/files
+            self.db.execute(
+                "UPDATE memory SET stale=?, stale_files=? WHERE id=?",
+                (1 if stale else 0, json.dumps(files or []), mem_id))
+        else:
+            self.db.execute(
+                "UPDATE memory SET stale=?, stale_since=?, stale_files=? WHERE id=?",
+                (1 if stale else 0, since, json.dumps(files or []), mem_id))
+
     def forget(self, mem_id: str) -> bool:
         cur = self.db.execute("UPDATE memory SET status='abandoned',updated=? WHERE id=?",
                               (time.time(), mem_id))
@@ -169,6 +191,8 @@ class Store:
         d = dict(r)
         d["files"] = json.loads(d["files"] or "[]")
         d["symbols"] = json.loads(d["symbols"] or "[]")
+        d["stale"] = bool(d.get("stale"))
+        d["stale_files"] = json.loads(d.get("stale_files") or "[]")
         return d
 
     # -- branches / commits -------------------------------------------------

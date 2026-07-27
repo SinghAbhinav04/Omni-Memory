@@ -1,7 +1,7 @@
 """Assemble the knowledge graph for the dashboard from stored memory + git.
 
-P0 builds nodes/edges from memories, files, branches and commits. P1 augments
-this with graphify's tree-sitter AST code graph (see graph/ package).
+P0 builds nodes/edges from memories, files, branches and commits. A later phase
+augments this with a tree-sitter AST code graph (see graph/ package).
 """
 from __future__ import annotations
 

@@ -1,8 +1,8 @@
 """Assemble a compact, high-signal repo snapshot to feed the model on `build`.
 
 Prioritizes the files that reveal architecture: manifests, docs, entrypoints,
-controllers/routes/services/models/config. Truncated to a char budget (P3:
-per-area chunking via the graphify AST graph for big monorepos).
+controllers/routes/services/models/config. Truncated to a char budget (a later
+phase adds per-area chunking via the AST code graph for big monorepos).
 """
 from __future__ import annotations
 

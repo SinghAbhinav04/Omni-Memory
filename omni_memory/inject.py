@@ -16,7 +16,9 @@ ENFORCE_RULES = (
     "RULES: (1) Treat the memory below as verified project truth — prefer it over "
     "assumptions. (2) When you rely on a memory, cite its [id]. (3) If the answer "
     "is NOT covered by memory or the code, say \"not in memory\" — do NOT invent "
-    "architecture, endpoints, params, or flows."
+    "architecture, endpoints, params, or flows. (4) Items marked ⚠STALE reference "
+    "code that changed since they were written — re-verify against the code before "
+    "relying on them."
 )
 
 
@@ -42,6 +44,7 @@ def build_block(store: Store, root: Path, query: str = "",
         tag = f"[{m['id']}]"
         where = (" · " + ", ".join(m["files"][:3])) if m["files"] else ""
         br = "" if cur != "*" else f" ({m['branch']})"
-        lines.append(f"{tag} {m['kind']}{br}: {m['text']}{where}")
+        stale = " ⚠STALE" if m.get("stale") else ""
+        lines.append(f"{tag} {m['kind']}{br}{stale}: {m['text']}{where}")
     lines.append("=== END MEMORY — cite [id]s you used ===")
     return "\n".join(lines)

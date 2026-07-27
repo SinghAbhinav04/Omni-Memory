@@ -1,17 +1,16 @@
-"""Relevance ranking for memory retrieval — zero-dep, ported from graphify.
+"""Relevance ranking for memory retrieval — zero-dep, pure Python + math.
 
 The old path filtered with SQL `LIKE` and required *every* query token to be
 present, then sorted by recency. That buries a memory that matches 2 of 3 terms
 and lets stale-but-recent noise win. This replaces it with an IDF-weighted,
-tiered scorer (the same idea as graphify's `serve.py::_score_query`), adapted
-for memories:
+tiered scorer:
 
-  score = (Σ per-term tier·IDF) · coverage²        # what graphify does
+  score = (Σ per-term tier·IDF) · coverage²        # relevance core
         + full-query bonus                          # multi-word phrase match
         + file/symbol overlap boost                 # anchored to current work
         × recency · kind-weight · confidence        # memory-specific signals
 
-No external search dependency — pure Python + math.
+No external search dependency.
 """
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ import re
 import time
 from typing import Optional
 
-# Tiers mirror graphify: exact ≫ prefix > substring, taken strongest-per-term.
+# Match tiers: exact ≫ prefix > substring, taken strongest-per-term.
 _EXACT, _PREFIX, _SUBSTR = 10.0, 3.0, 1.0
 _FULLQ_EXACT, _FULLQ_PREFIX = 6.0, 2.0
 _FILE_BOOST = 4.0            # memory anchored to a file in play right now

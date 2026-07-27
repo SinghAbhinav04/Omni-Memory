@@ -10,8 +10,8 @@ keywords = ["ai", "memory", "coding-agent", "knowledge-graph", "claude-code", "m
 dependencies = []  # core runs on the stdlib; optional extras add graph/UI power
 
 [project.optional-dependencies]
-graph = ["networkx>=3.0"]          # richer graph analysis (P1 graphify AST)
-serve = ["fastapi>=0.110", "uvicorn>=0.29"]  # optional richer API (P1)
+graph = ["networkx>=3.0"]          # richer graph analysis (AST code graph)
+serve = ["fastapi>=0.110", "uvicorn>=0.29"]  # optional richer API
 dev = ["pytest>=7.0"]
 
 [project.scripts]

@@ -14,47 +14,46 @@ dashboard to browse it all.
 
 ## 0. Positioning & why it wins
 
-We stand on two excellent MIT parents and go past both by owning the
-intersection neither covers:
+Most memory tools do *one* of these well; OmniMemory owns the intersection —
+and adds the pieces none of them cover:
 
-| | graphify | supermemory | **OmniMemory** |
-|---|---|---|---|
-| Local code knowledge graph (AST) | ✅ | — | ✅ (reuse) |
-| Evolving conversational memory | — | ✅ | ✅ (reimpl. local) |
-| Contradiction handling + forgetting | — | ✅ | ✅ |
-| Multi-IDE skill install + MCP | ✅ | partial | ✅ |
-| **Branch-aware memory + git provenance** | — | — | ✅ ⭐ |
-| **Runtime request-flow capture (real params/returns)** | static only | — | ✅ ⭐ |
-| **Enforced usage (anti-hallucination)** | — | — | ✅ ⭐ |
-| **Local dashboard (graph + readable memory docs + repo graph)** | graph.html | cloud UI | ✅ ⭐ |
-| Fully local / free | ✅ | leans cloud | ✅ |
+| Capability | OmniMemory |
+|---|---|
+| Local code knowledge graph (AST) | ✅ |
+| Evolving conversational memory | ✅ (local, zero-cloud) |
+| Contradiction handling + forgetting | ✅ |
+| Multi-IDE skill install + MCP | ✅ |
+| **Branch-aware memory + git provenance** | ✅ ⭐ |
+| **Staleness anchoring (memory re-verified against code changes)** | ✅ ⭐ |
+| **Runtime request-flow capture (real params/returns)** | ✅ ⭐ |
+| **Enforced usage (anti-hallucination)** | ✅ ⭐ |
+| **Local dashboard (graph + readable memory docs + repo graph)** | ✅ ⭐ |
+| Fully local / free | ✅ |
 
-The three ⭐ + the local dashboard are the reason-to-exist and the star magnet.
+The ⭐ rows + the local dashboard are the reason-to-exist and the star magnet.
 Viral demo: *"switch to my feature branch → it already knows what changed there,
 who started it, and whether it merged."*
 
 ---
 
-## 1. Parents & reuse map (both MIT — attributed in NOTICE)
+## 1. Module map
 
-**Reuse from graphify (Python):**
-- `extract.py` — tree-sitter AST → code nodes/edges (deterministic, no LLM)
-- `build.py` / `cluster.py` / `analyze.py` — NetworkX graph, Leiden communities, god nodes
-- `export.py` / `tree_html.py` — graph.json / graph.html / svg
-- `callflow_html.py` — Mermaid architecture & call-flow diagrams
-- `pg_introspect.py` — Postgres schema context; `manifest_ingest.py` — deps
-- `serve.py` — MCP stdio server; `install.py` — multi-IDE skill wiring
-- `watch.py` — incremental re-map on file change; `global_graph.py` — persistence
-- `security.py` / `validate.py` — hardening + schema validation
+**Core (built, zero-dep):**
+- `store.py` — SQLite store + schema, contradiction/supersede, staleness columns
+- `session_memory.py` — SessionEnd capture (transcript+diff → memories)
+- `cleanup.py` — extraction-noise filter (anchored facts in, doc prose out)
+- `rank.py` — IDF-tiered relevance ranker for retrieval
+- `staleness.py` — flag memories whose files changed since they were written
+- `inject.py` — prompt injection + enforcement (cite [id]s or "not in memory")
+- `branch.py` / `gitmeta.py` — branch-aware scoping + git provenance
+- `graphbuild.py` — knowledge graph from memory + git topology
+- `digest.py` / `artifacts.py` — MEMORY.md + AI-written api-map / linkup
+- `llm.py` / `context.py` — optional model layer (key-optional) + repo snapshot
+- `serve.py` + `static/` — local dashboard (graph · memory docs · repo graph)
+- `install.py` — multi-IDE hook/skill wiring
 
-**Reuse from supermemory:**
-- `@supermemory/memory-graph` (React) — the interactive connected-graph component
-- `apps/mcp` — MCP tool shapes / OAuth patterns
-- Memory-engine *design*: fact extraction, contradiction resolution, temporal
-  forgetting, profiles (we reimplement in Python, local, no cloud)
-
-**Build new (the wedge):** `session_memory.py`, `inject.py` (+enforcement),
-`branch.py`, `gitmeta.py`, `runtime.py`, the FastAPI `api.py`, the `web/` dashboard.
+**Planned:** `runtime.py` (runtime flow capture), a tree-sitter AST code graph
+under `graph/`, and an MCP server face for non–Claude Code agents.
 
 ---
 
@@ -66,7 +65,7 @@ Everything is a toggle/subcommand; nothing is forced on.
 /omni-memory                 status + turn the layer on/off for this project
 /omni-memory on | off        enable/disable memory injection
 /omni-memory branch-aware    toggle branch-scoped memory (on by default)
-/omni-memory map             (re)build the code/knowledge graph      [graphify]
+/omni-memory map             (re)build the code/knowledge graph
 /omni-memory ui              launch the local dashboard (browser)
 /omni-memory graph           open the interactive graph view
 /omni-memory recall <q>      query memory instead of grepping
@@ -91,7 +90,7 @@ Everything is a toggle/subcommand; nothing is forced on.
 ```
 
 1. **Capture**
-   - *Static:* graphify AST graph + DB (`pg_introspect`) + deps + OpenAPI/endpoints
+   - *Static:* AST code graph + DB schema introspection + deps + OpenAPI/endpoints
    - *Conversational:* SessionEnd hook → extract decisions / facts / gotchas / flows
      from the transcript + diff (uses the agent's own model)
    - *Runtime (later):* ingest logs / test runs / optional instrumentation → actual
@@ -126,7 +125,7 @@ commits(sha, branch, author, date, message, files[])
 
 flows(id, name, entry, steps_json[success/failure with params+returns], branch)
 
-graph_nodes / graph_edges  (branch-tagged; from graphify)
+graph_nodes / graph_edges  (branch-tagged; AST code graph)
 memory_commit_link(memory_id, sha)
 ```
 
@@ -151,13 +150,13 @@ Launched by `/omni-memory ui` → FastAPI serves a **bundled** Vite+React SPA on
 localhost (works offline; ships pre-built in the wheel).
 
 **Views:**
-- **Graph** — interactive connected-knowledge graph (`@supermemory/memory-graph`)
+- **Graph** — interactive connected-knowledge graph (d3 force-directed)
 - **Memory** — every stored memory as browsable, searchable "docs"; filter by
   branch / kind / file; click to read full entry + linked files/symbols/commits
 - **Repo Graph** — the git DAG (`@gitgraph/js` or d3): `main` trunk + feature
   branches, merge points + dates + **branch creator**; click a commit/branch →
   the memories attached to it (git history *is* the memory index)
-- **Flows** — request/call-flow diagrams (graphify Mermaid + runtime later)
+- **Flows** — request/call-flow diagrams (Mermaid + runtime later)
 - **Timeline** — memory growing over time ("it's alive")
 
 **API:** `/api/memories` (list/search/filter) · `/api/memory/:id` · `/api/graph`
@@ -172,7 +171,7 @@ localhost (works offline; ships pre-built in the wheel).
   server for recall tools.
 - **Antigravity:** via the MCP server (same `serve.py`) + its rules/memories
   mechanism.
-- `/omni-memory install` writes both (reuse graphify's per-platform writers).
+- `/omni-memory install` writes both via per-platform config writers.
 - Extensible to Codex / OpenCode / Gemini CLI / VS Code via the same MCP + skill
   pattern.
 
@@ -189,16 +188,15 @@ multi-repo BFHL platform kb). We mirror its proven shape:
 - **Kinds mapped to that taxonomy:** `decision · concept · flow · event (kafka
   contract) · endpoint (controller→service→repo+params) · db · component ·
   gotcha/known-issue · assumption (verify) · todo · fact`.
-- **Confidence markers** — `EXTRACTED / INFERRED / ASSUMPTION` (graphify labels +
-  their TODO/ASSUMPTION/Inferred convention).
+- **Confidence markers** — `EXTRACTED / INFERRED / ASSUMPTION` on every fact.
 - **Two killer auto-generated artifacts (P1/P2, from the AST graph + runtime):**
   - **api-map** — every endpoint → controller → service → repo/downstream with
     DTOs/params/headers (replaces hand-written `api-map.md`).
   - **linkup** — the master cross-reference: Mermaid repo-dependency graph,
     controller→service→repo maps, Kafka producer/consumer contracts, shared
     DBs/code (replaces hand-written `linkup.md`).
-- **Multi-repo aware** — one memory/graph spanning sibling repos (graphify
-  `global_graph`), because real systems are many repos.
+- **Multi-repo aware** — one memory/graph spanning sibling repos, because real
+  systems are many repos.
 - **Mermaid** for dependency/flow diagrams in the dashboard + digest.
 
 ## 7b. Autonomy & persistence — why this beats other memory tools
@@ -244,11 +242,11 @@ omni-memory/
     serve.py          # MCP + FastAPI
     api.py            # HTTP endpoints for the UI
     install.py        # multi-IDE wiring
-    graph/            # reused graphify modules (extract/build/cluster/export/callflow)
-    static/           # built dashboard (bundled)
-  web/                # Vite + React dashboard (memory-graph + gitgraph reuse)
+    graph/            # AST code graph (extract/build/cluster/export/callflow)
+    static/           # bundled dashboard (single-file HTML)
+  web/                # optional richer dashboard build
   skills/omni-memory/ # the skill package (SKILL.md + refs)
-  NOTICE  LICENSE(MIT)  README.md  PLAN.md  pyproject.toml
+  LICENSE(MIT)  README.md  PLAN.md  pyproject.toml
 ```
 
 ---
@@ -256,8 +254,8 @@ omni-memory/
 ## 9. Phases
 
 - **P0 — core** — store + branch model + git metadata + Claude Code capture /
-  inject / enforce hooks + `/omni-memory map` (graphify graph). Demoable:
-  persistent, branch-aware, enforced memory in Claude Code.
+  inject / enforce hooks + `/omni-memory map`. Demoable: persistent,
+  branch-aware, enforced memory in Claude Code.
 - **P0.5 — minimal dashboard** — FastAPI + Graph & Memory-docs views (the demo UI).
 - **P1 — branch-aware, full** — git provenance + **Repo Graph** view + Antigravity (MCP).
 - **P2 — runtime flow capture** — endpoint→DB→Kafka→params/returns, success vs failure.
@@ -273,7 +271,7 @@ omni-memory/
 - **PR/issue ingestion** — pull decisions from PR descriptions & review threads.
 - **"Why did we…" answers** — trace a decision to its commit + chat origin.
 - **Onboarding mode** — new dev asks the repo questions, gets guided tours.
-- **Language coverage** — extend AST extractors (graphify pattern).
+- **Language coverage** — extend the tree-sitter AST extractors.
 - **Runtime adapters** — OpenTelemetry / log-format plugins for flow capture.
 - **Secrets safety** — redact params/returns; never store credentials.
 - **Export** — GraphML / Obsidian vault of the whole memory.
@@ -288,4 +286,5 @@ omni-memory/
   semantic/conversational layer.
 - **Never guess.** Enforcement makes the agent cite memory or admit it doesn't know.
 - **Minimalist.** Clean monochrome UI, modular toggles, one-command install.
-- **Attribution.** Credit graphify + supermemory (MIT) in NOTICE/README.
+- **Zero-dependency core.** The whole memory engine runs on the Python stdlib;
+  extras (graph analysis, richer serving) are strictly optional.

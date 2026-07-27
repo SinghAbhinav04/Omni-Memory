@@ -17,6 +17,8 @@ def sync_git(store: Store, root: Path) -> dict:
         store.upsert_commit(c["sha"], c["branch"], c["author"], c["date"],
                             c["message"], c["files"])
     store.set_meta("default_branch", snap["default"])
+    from . import staleness
+    staleness.recompute(store, root)
     return snap
 
 

@@ -26,9 +26,12 @@ def cmd_status(args):
     ai = llm.provider() or "none (set GEMINI_API_KEY)"
     print(f"OmniMemory {__version__}  ·  project: {root.name}")
     print(f"  layer: {'ON' if on else 'OFF'}   branch-aware: {'ON' if ba else 'OFF'}   AI: {ai}")
+    stale = s.db.execute(
+        "SELECT COUNT(*) n FROM memory WHERE status='active' AND stale=1").fetchone()["n"]
+    stale_note = f"   ⚠ {stale} stale (run: omni-memory check)" if stale else ""
     print(f"  branch: {cur}   memories: {c.get('active',0)} active, "
           f"{c.get('merged',0)} merged, {c.get('superseded',0)} superseded")
-    print(f"  store: {s.dir}")
+    print(f"  store: {s.dir}{stale_note}")
     return 0
 
 
@@ -157,7 +160,8 @@ def cmd_recall(args):
         return 0
     for m in mems:
         where = ("  · " + ", ".join(m["files"][:3])) if m["files"] else ""
-        print(f"[{m['id']}] {m['kind']} ({m['branch']}): {m['text']}{where}")
+        stale = " ⚠STALE" if m.get("stale") else ""
+        print(f"[{m['id']}] {m['kind']} ({m['branch']}){stale}: {m['text']}{where}")
     return 0
 
 
@@ -169,6 +173,24 @@ def cmd_branches(args):
         merged = f" → merged into {b['into_branch']}" if b["status"] == "merged" else ""
         who = f"  by {b['creator']}" if b.get("creator") else ""
         print(f"{star} {b['name']:24} {b['status']}{merged}{who}")
+    return 0
+
+
+def cmd_check(args):
+    """Re-anchor memories against git: flag any whose files changed since they
+    were written as ⚠ stale (they keep their content — re-verify, don't trust)."""
+    from . import staleness
+    s, root = _store()
+    r = staleness.recompute(s, root)
+    print(f"[+] checked {r['checked']} anchored memory · "
+          f"{r['stale']} stale · {r['cleared']} cleared")
+    if r["stale"]:
+        rows = s.db.execute(
+            "SELECT id, kind, text FROM memory "
+            "WHERE status='active' AND stale=1 ORDER BY stale_since DESC LIMIT 20"
+        ).fetchall()
+        for row in rows:
+            print(f"    ⚠ [{row['id']}] {row['kind']}: {row['text'][:80]}")
     return 0
 
 
@@ -186,7 +208,7 @@ def cmd_map(args):
     out = s.dir / "graph.json"
     out.write_text(json.dumps(g, indent=2))
     print(f"[+] graph: {len(g['nodes'])} nodes, {len(g['edges'])} edges → {out}")
-    print("    (P1: augment with graphify AST code graph)")
+    print("    (next: augment with a tree-sitter AST code graph)")
     return 0
 
 
@@ -289,6 +311,7 @@ def main(argv=None):
     sub.add_parser("branches")
     fg = sub.add_parser("forget"); fg.add_argument("id")
     sub.add_parser("map")
+    sub.add_parser("check")
     sub.add_parser("digest")
     bd = sub.add_parser("build")
     bd.add_argument("--no-docs", action="store_true")
@@ -307,7 +330,7 @@ def main(argv=None):
         None: cmd_status, "status": cmd_status, "on": cmd_toggle, "off": cmd_toggle,
         "branch-aware": cmd_branch_aware, "remember": cmd_remember, "capture": cmd_capture,
         "inject": cmd_inject, "recall": cmd_recall, "branches": cmd_branches,
-        "forget": cmd_forget, "map": cmd_map, "digest": cmd_digest,
+        "forget": cmd_forget, "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,
     }
