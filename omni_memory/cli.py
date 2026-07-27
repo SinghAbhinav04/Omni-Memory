@@ -177,13 +177,19 @@ def cmd_branches(args):
 
 
 def cmd_check(args):
-    """Re-anchor memories against git: flag any whose files changed since they
-    were written as ⚠ stale (they keep their content — re-verify, don't trust)."""
+    """Re-anchor memories against git: flag any whose code changed since they
+    were written as ⚠ stale (they keep their content — re-verify, don't trust).
+    Rebuilds the code graph first so staleness is symbol/caller-precise."""
     from . import staleness
+    from .graph import build as codegraph
     s, root = _store()
+    try:
+        codegraph.build_code_graph(s, root)
+    except Exception:  # noqa: BLE001
+        pass  # fall back to file-level staleness
     r = staleness.recompute(s, root)
-    print(f"[+] checked {r['checked']} anchored memory · "
-          f"{r['stale']} stale · {r['cleared']} cleared")
+    print(f"[+] checked {r['checked']} anchored memory · {r['stale']} stale · "
+          f"{r['cleared']} cleared  ({r['level']}-level)")
     if r["stale"]:
         rows = s.db.execute(
             "SELECT id, kind, text FROM memory "
@@ -207,8 +213,17 @@ def cmd_map(args):
     g = graphbuild.build_graph(s, root)
     out = s.dir / "graph.json"
     out.write_text(json.dumps(g, indent=2))
-    print(f"[+] graph: {len(g['nodes'])} nodes, {len(g['edges'])} edges → {out}")
-    print("    (next: augment with a tree-sitter AST code graph)")
+    print(f"[+] memory graph: {len(g['nodes'])} nodes, {len(g['edges'])} edges → {out}")
+
+    from .graph import build as codegraph, extract
+    cg = codegraph.build_code_graph(s, root)
+    if cg["files_parsed"]:
+        print(f"[+] code graph ({cg['backend']}): {cg['nodes']} symbols, "
+              f"{cg['edges']} edges over {cg['files_parsed']} file(s)")
+        print(f"    {cg['kinds']}  ·  {cg['rels']}")
+    if not extract.available():
+        print("    [i] deep multi-language graph needs tree-sitter → "
+              "pip install omni-memory-agent (Python is graphed via stdlib ast).")
     return 0
 
 

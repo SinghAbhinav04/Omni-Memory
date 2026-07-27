@@ -15,7 +15,8 @@ hallucinating architecture.
 omni-memory status            # layer state, branch, memory counts
 omni-memory on | off          # enable/disable the memory layer
 omni-memory branch-aware      # toggle branch-scoped memory
-omni-memory map               # (re)build the knowledge graph
+omni-memory map               # (re)build the knowledge graph + code graph (tree-sitter)
+omni-memory check             # re-anchor memories vs git; flag ⚠ stale (symbol-level)
 omni-memory ui [--port]       # open the local dashboard (graph + memory docs)
 omni-memory recall <query>    # query memory instead of grepping
 omni-memory branches          # git topology + per-branch memory

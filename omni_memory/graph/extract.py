@@ -34,8 +34,18 @@ LANGUAGES = {
     ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp", ".hpp": "cpp",
 }
 
-# Per-language node-type spec for the tree-sitter walker. Python is wired now;
-# JS/TS and others slot in here (see build order step 4) without touching logic.
+# Per-language node-type spec for the tree-sitter walker. New languages slot in
+# here without touching the walker logic. `bases_field` = a child field holding
+# superclasses; `bases_type` = a child node type to scan for them (JS heritage).
+_JS_LIKE = {
+    "func": {"function_declaration", "method_definition",
+             "generator_function_declaration"},
+    "class": {"class_declaration"},
+    "name_field": "name",
+    "call": {"call_expression"}, "call_field": "function",
+    "import": {"import_statement"},
+    "bases_field": None, "bases_type": "class_heritage",
+}
 _TS_SPEC = {
     "python": {
         "func": {"function_definition"},
@@ -43,9 +53,13 @@ _TS_SPEC = {
         "name_field": "name",
         "call": {"call"}, "call_field": "function",
         "import": {"import_statement", "import_from_statement"},
-        "bases_field": "superclasses",
+        "bases_field": "superclasses", "bases_type": None,
     },
+    "javascript": _JS_LIKE,
+    "typescript": {**_JS_LIKE,
+                   "class": {"class_declaration", "abstract_class_declaration"}},
 }
+_TS_SPEC["tsx"] = _TS_SPEC["typescript"]
 
 _SKIP_DIRS = {"node_modules", ".git", ".omni-memory", "dist", "build",
               "__pycache__", ".venv", "venv", "env", "target", ".tox",
@@ -219,10 +233,15 @@ def _extract_treesitter(rel: str, src: str, lang: str) -> dict:
                     "line_start": c.start_point[0] + 1,
                     "line_end": c.end_point[0] + 1, "parent": parent_id})
                 if is_class:
-                    bf = c.child_by_field_name(spec["bases_field"])
-                    if bf:
+                    bf = None
+                    if spec.get("bases_field"):
+                        bf = c.child_by_field_name(spec["bases_field"])
+                    if bf is None and spec.get("bases_type"):
+                        bf = next((k for k in c.children
+                                   if k.type == spec["bases_type"]), None)
+                    if bf is not None:
                         for b in _descendants(bf):
-                            if b.type in ("identifier",):
+                            if b.type in ("identifier", "type_identifier"):
                                 r["bases"].append({"cls": sid, "name": text(b)})
                 walk(c, sid, nstack, is_class)
             else:

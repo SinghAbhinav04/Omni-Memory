@@ -1,16 +1,23 @@
 [project]
 name = "omni-memory-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Persistent, branch-aware, git-anchored memory & context layer for coding agents."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
 authors = [{ name = "Abhinav Singh" }]
 keywords = ["ai", "memory", "coding-agent", "knowledge-graph", "claude-code", "mcp"]
-dependencies = []  # core runs on the stdlib; optional extras add graph/UI power
+# The memory engine is pure stdlib. tree-sitter powers the multi-language code
+# graph + symbol-level staleness; it needs Python >=3.10, so it's pulled in
+# automatically there and simply skipped on 3.9 (which falls back to the stdlib
+# `ast` graph for Python). Base install therefore works on 3.9+ with no compiler.
+dependencies = [
+  "tree-sitter>=0.25; python_version >= '3.10'",
+  "tree-sitter-language-pack>=1.0; python_version >= '3.10'",
+]
 
 [project.optional-dependencies]
-graph = ["networkx>=3.0"]          # richer graph analysis (AST code graph)
+graph = ["networkx>=3.0"]          # richer graph analytics (communities, centrality)
 serve = ["fastapi>=0.110", "uvicorn>=0.29"]  # optional richer API
 dev = ["pytest>=7.0"]
 

@@ -77,8 +77,15 @@ CREATE TABLE IF NOT EXISTS commits(
 CREATE TABLE IF NOT EXISTS flows(
   id TEXT PRIMARY KEY, name TEXT, entry TEXT, steps TEXT, branch TEXT);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS code_nodes(
+  id TEXT PRIMARY KEY, kind TEXT, name TEXT, file TEXT,
+  line_start INTEGER, line_end INTEGER, parent TEXT);
+CREATE TABLE IF NOT EXISTS code_edges(src TEXT, dst TEXT, rel TEXT);
 CREATE INDEX IF NOT EXISTS idx_mem_branch ON memory(branch);
 CREATE INDEX IF NOT EXISTS idx_mem_status ON memory(status);
+CREATE INDEX IF NOT EXISTS idx_cedge_dst ON code_edges(dst);
+CREATE INDEX IF NOT EXISTS idx_cnode_file ON code_nodes(file);
+CREATE INDEX IF NOT EXISTS idx_cnode_name ON code_nodes(name);
 """
 
 
@@ -120,7 +127,9 @@ class Store:
         # contradiction handling: same branch+kind and near-identical text supersedes
         self._supersede_duplicates(m)
         self.db.execute(
-            "INSERT OR REPLACE INTO memory VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO memory"
+            "(id,branch,kind,text,files,symbols,commit_range,created,updated,"
+            "status,confidence,source,supersedes_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (m.id, m.branch, m.kind, m.text, json.dumps(m.files),
              json.dumps(m.symbols), m.commit_range, m.created, m.updated,
              m.status, m.confidence, m.source, m.supersedes_id))
@@ -194,6 +203,26 @@ class Store:
         d["stale"] = bool(d.get("stale"))
         d["stale_files"] = json.loads(d.get("stale_files") or "[]")
         return d
+
+    # -- code graph ---------------------------------------------------------
+    def replace_code_graph(self, nodes: list[dict], edges: list[dict]) -> None:
+        self.db.execute("DELETE FROM code_nodes")
+        self.db.execute("DELETE FROM code_edges")
+        self.db.executemany(
+            "INSERT OR REPLACE INTO code_nodes VALUES(?,?,?,?,?,?,?)",
+            [(n["id"], n["kind"], n["name"], n["file"], n["line_start"],
+              n["line_end"], n.get("parent")) for n in nodes])
+        self.db.executemany("INSERT INTO code_edges VALUES(?,?,?)",
+                            [(e["src"], e["dst"], e["rel"]) for e in edges])
+        self.db.commit()
+
+    def code_graph(self) -> tuple[list[dict], list[dict]]:
+        nodes = [dict(r) for r in self.db.execute("SELECT * FROM code_nodes")]
+        edges = [dict(r) for r in self.db.execute("SELECT * FROM code_edges")]
+        return nodes, edges
+
+    def has_code_graph(self) -> bool:
+        return bool(self.db.execute("SELECT 1 FROM code_nodes LIMIT 1").fetchone())
 
     # -- branches / commits -------------------------------------------------
     def upsert_branch(self, **kw: Any) -> None:

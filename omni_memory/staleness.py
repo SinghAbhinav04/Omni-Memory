@@ -1,69 +1,134 @@
-"""Staleness anchoring — flag memories whose code has changed underneath them.
+"""Staleness anchoring — flag memories whose code changed underneath them.
 
 A memory is anchored to the commit it was written at (`commit_range`) and the
-files it describes. When those files change in later commits, the memory may no
-longer be true. Rather than walk an AST call-graph, we walk git history — for
-each memory, is any of its files touched between its anchor commit and HEAD?
+files/symbols it describes. When those change in later commits, the memory may no
+longer be true. Rather than walk an AST at query time, we walk git history.
 
-Flagged memories keep their content (never auto-deleted — the code changing does
-not prove the *decision* wrong) but are marked so inject/recall/dashboard can
-show "⚠ may be stale, re-verify". Cheap: one `git diff --name-only` per distinct
-anchor commit, cached across memories that share it.
+Two levels of precision, chosen automatically:
+  - SYMBOL level (when a code graph exists): map the memory to its symbol(s),
+    find which symbols actually changed between its anchor and HEAD (git diff
+    hunk lines ∩ symbol line ranges), propagate to dependents via the call graph
+    (affected.py), and flag the memory if its symbol is in that set. Precise —
+    an unrelated edit to the same file does NOT flag it.
+  - FILE level (fallback): flag if any of the memory's files changed at all.
+
+Flagged memories keep their content (code changing doesn't disprove a decision)
+but are marked so inject/recall/dashboard can show "⚠ may be stale, re-verify".
 """
 from __future__ import annotations
 
+import json
+import re
 import time
 from pathlib import Path
 
 from . import gitmeta
 from .store import Store
 
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
 
 def recompute(store: Store, root: Path) -> dict:
     """Re-evaluate staleness for every active memory. Returns summary counts."""
     if not gitmeta.is_repo(root):
-        return {"checked": 0, "stale": 0, "cleared": 0}
+        return {"checked": 0, "stale": 0, "cleared": 0, "level": "none"}
     head = gitmeta._git(root, "rev-parse", "HEAD")
     if not head:
-        return {"checked": 0, "stale": 0, "cleared": 0}
+        return {"checked": 0, "stale": 0, "cleared": 0, "level": "none"}
+
+    use_symbols = store.has_code_graph()
+    nodes, edges = store.code_graph() if use_symbols else ([], [])
+    file_symbols: dict[str, list[dict]] = {}
+    name_index: dict[tuple, str] = {}
+    for n in nodes:
+        if n["kind"] in ("function", "method", "class"):
+            file_symbols.setdefault(n["file"], []).append(n)
+            name_index[(n["file"], n["name"])] = n["id"]
 
     rows = store.db.execute(
-        "SELECT id, files, commit_range, stale FROM memory WHERE status='active'"
-    ).fetchall()
+        "SELECT id, files, symbols, commit_range, stale FROM memory "
+        "WHERE status='active'").fetchall()
 
-    changed_cache: dict[str, set[str]] = {}
+    changed_files_cache: dict[str, set[str]] = {}
+    affected_cache: dict[str, set[str]] = {}
     now = time.time()
     checked = stale = cleared = 0
 
     for r in rows:
-        import json
         files = set(json.loads(r["files"] or "[]"))
+        symbols = json.loads(r["symbols"] or "[]")
         anchor = (r["commit_range"] or "").strip()
         if not files or not anchor:
             continue
         checked += 1
-        if anchor not in changed_cache:
-            changed_cache[anchor] = _changed_since(root, anchor, head)
-        touched = files & changed_cache[anchor]
-        is_stale = bool(touched)
+
+        if anchor not in changed_files_cache:
+            changed_files_cache[anchor] = _changed_files(root, anchor, head)
+        changed_files = changed_files_cache[anchor]
+
+        # Resolve this memory's own symbol ids (name seen in one of its files).
+        mem_ids = {name_index[(f, name)] for f in files for name in symbols
+                   if (f, name) in name_index} if use_symbols else set()
+
+        if mem_ids:
+            if anchor not in affected_cache:
+                affected_cache[anchor] = _affected_symbols(
+                    root, anchor, head, changed_files, file_symbols, edges)
+            is_stale = bool(mem_ids & affected_cache[anchor])
+            touched = sorted(mem_ids & affected_cache[anchor])
+        else:  # file-level fallback
+            hit = files & changed_files
+            is_stale = bool(hit)
+            touched = sorted(hit)
+
         was_stale = bool(r["stale"])
-        if is_stale and not was_stale:
-            store.set_stale(r["id"], True, now, sorted(touched))
-            stale += 1
-        elif is_stale:
-            store.set_stale(r["id"], True, None, sorted(touched))  # refresh files
+        if is_stale:
+            store.set_stale(r["id"], True, None if was_stale else now, touched)
             stale += 1
         elif was_stale:
             store.set_stale(r["id"], False, None, [])
             cleared += 1
     store.db.commit()
-    return {"checked": checked, "stale": stale, "cleared": cleared}
+    return {"checked": checked, "stale": stale, "cleared": cleared,
+            "level": "symbol" if use_symbols else "file"}
 
 
-def _changed_since(root: Path, anchor: str, head: str) -> set[str]:
-    """Files changed in anchor..head. Empty set if the anchor is unknown/invalid
-    (a squashed/rebased-away sha) — we don't want to nuke every memory then."""
+def _affected_symbols(root: Path, anchor: str, head: str, changed_files: set,
+                      file_symbols: dict, edges: list) -> set:
+    """Symbols that changed between anchor..head, plus their dependents."""
+    from .graph import affected as aff
+    changed: set[str] = set()
+    for f in changed_files:
+        syms = file_symbols.get(f)
+        if not syms:
+            continue
+        lines = _changed_lines(root, anchor, head, f)
+        if not lines:
+            continue
+        for s in syms:
+            lo, hi = s["line_start"], s["line_end"]
+            if any(lo <= ln <= hi for ln in lines):
+                changed.add(s["id"])
+    return aff.affected(changed, edges, depth=2)
+
+
+def _changed_files(root: Path, anchor: str, head: str) -> set:
     if not gitmeta._git(root, "rev-parse", "--verify", "--quiet", anchor + "^{commit}"):
         return set()
     out = gitmeta._git(root, "diff", "--name-only", f"{anchor}..{head}")
-    return {line.strip() for line in out.splitlines() if line.strip()}
+    return {ln.strip() for ln in out.splitlines() if ln.strip()}
+
+
+def _changed_lines(root: Path, anchor: str, head: str, file: str) -> set:
+    """HEAD-side line numbers changed in `file` across anchor..head."""
+    out = gitmeta._git(root, "diff", "--unified=0", f"{anchor}..{head}", "--", file)
+    lines: set[int] = set()
+    for row in out.splitlines():
+        m = _HUNK.match(row)
+        if not m:
+            continue
+        start = int(m.group(1))
+        count = int(m.group(2)) if m.group(2) is not None else 1
+        for ln in range(start, start + max(count, 1)):
+            lines.add(ln)
+    return lines
