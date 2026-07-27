@@ -7,10 +7,25 @@ hallucinating architecture it never verified.
 > Plugs into **Claude Code** and **Antigravity** (more IDEs coming). Toggle with
 > `/omni-memory`. Browse everything in a minimalist local dashboard.
 
+## Install
+
+**Option A — Claude Code plugin (no pip needed).** The zero-dependency engine
+rides along inside the plugin, so this is all it takes:
+
+```
+/plugin marketplace add SinghAbhinav04/Omni-Memory
+/plugin install omni-memory@singhabhinav
+```
+
+That wires the skill + the capture/inject hooks automatically. Just work — memory
+injects on every prompt and updates itself when a session ends.
+
+**Option B — pip (gives you the `omni-memory` CLI everywhere).**
+
 ```bash
-python -m pip install -e .     # or: pip install omni-memory  (once published)
-omni-memory install            # wire it into Claude Code
-omni-memory build              # one-time: seed memory from the repo (optional)
+pip install omni-memory            # or, from a clone: python -m pip install -e .
+omni-memory install                # wire it into Claude Code
+omni-memory build                  # one-time: seed memory from the repo (optional)
 omni-memory status
 ```
 

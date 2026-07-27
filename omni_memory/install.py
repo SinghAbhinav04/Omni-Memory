@@ -13,13 +13,17 @@ from pathlib import Path
 
 from .store import find_project_root
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SKILL_SRC = REPO_ROOT / "skills" / "omni-memory"
+PKG_ROOT = Path(__file__).resolve().parent          # the installed omni_memory/ package
+SKILL_SRC = PKG_ROOT / "skills" / "omni-memory"     # skill ships inside the wheel
 
 
 def _hook_cmd(event: str) -> str:
-    """Absolute, PATH-independent command (the shell fn isn't available to hooks)."""
-    return (f'PYTHONPATH="{REPO_ROOT}" "{sys.executable}" -m omni_memory hook {event}')
+    """Absolute, PATH-independent command (the shell fn isn't available to hooks).
+
+    `-m omni_memory` runs against the interpreter OmniMemory was installed under,
+    so it works whether installed from PyPI, `pip install -e .`, or a source tree
+    on PYTHONPATH."""
+    return f'PYTHONPATH="{PKG_ROOT.parent}" "{sys.executable}" -m omni_memory hook {event}'
 
 
 def _hooks_block() -> dict:

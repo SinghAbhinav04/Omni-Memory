@@ -25,4 +25,4 @@ build-backend = "setuptools.build_meta"
 packages = ["omni_memory", "omni_memory.graph"]
 
 [tool.setuptools.package-data]
-omni_memory = ["static/*.html"]
+omni_memory = ["static/*.html", "skills/omni-memory/SKILL.md", "skills/omni-memory/**/*"]

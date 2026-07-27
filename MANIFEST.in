@@ -1,0 +1,3 @@
+include LICENSE README.md PLAN.md
+recursive-include omni_memory/static *.html
+recursive-include omni_memory/skills *

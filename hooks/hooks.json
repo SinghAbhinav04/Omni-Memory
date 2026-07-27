@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONPATH=\"${CLAUDE_PLUGIN_ROOT}\" python3 -m omni_memory hook inject"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONPATH=\"${CLAUDE_PLUGIN_ROOT}\" python3 -m omni_memory hook capture"
+          }
+        ]
+      }
+    ]
+  }
+}

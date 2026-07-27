@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Plugin shim: exposes `omni-memory` on PATH while the plugin is enabled, running
+# the zero-dependency engine that ships inside the plugin. No pip install needed.
+# Self-locating so it works regardless of ${CLAUDE_PLUGIN_ROOT} being exported.
+here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m omni_memory "$@"
