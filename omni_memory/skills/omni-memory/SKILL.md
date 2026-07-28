@@ -23,6 +23,8 @@ omni-memory branches          # git topology + per-branch memory
 omni-memory remember "<text>" [--kind decision|fact|flow|gotcha|todo]
 omni-memory forget <id>       # archive a stale memory
 omni-memory used <id> …       # cite memories you relied on (improves ranking)
+omni-memory gc [--dry-run]    # quarantine dead/false memory (abandoned branches, stale)
+omni-memory restore <id|branch>  # un-quarantine
 omni-memory install           # wire hooks + skill into this agent
 ```
 

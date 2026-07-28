@@ -190,6 +190,16 @@ def cmd_check(args):
     r = staleness.recompute(s, root)
     print(f"[+] checked {r['checked']} anchored memory · {r['stale']} stale · "
           f"{r['cleared']} cleared  ({r['level']}-level)")
+    from . import eviction
+    sw = eviction.sweep(s, root, dry_run=False, purge=False)
+    if sw["quarantined"]:
+        print(f"[+] quarantined {len(sw['quarantined'])} dead/false memory "
+              f"(reversible: omni-memory restore <id|branch>)")
+        for c in sw["quarantined"][:8]:
+            print(f"    ⊘ [{c['id']}] {c['reason']}: {c['text']}")
+    if sw["purgeable"]:
+        print(f"[i] {len(sw['purgeable'])} quarantined >grace & uncited — "
+              f"remove with: omni-memory gc --purge")
     if r["stale"]:
         rows = s.db.execute(
             "SELECT id, kind, text FROM memory "
@@ -286,6 +296,33 @@ def cmd_used(args):
     return 0
 
 
+def cmd_gc(args):
+    """Garbage-collect dead/false memory: quarantine abandoned-branch and stale
+    memories (reversible); --purge hard-deletes long-quarantined uncited ones."""
+    from . import eviction
+    s, root = _store()
+    sw = eviction.sweep(s, root, dry_run=args.dry_run, purge=args.purge)
+    verb = "would quarantine" if args.dry_run else "quarantined"
+    print(f"[+] {verb} {len(sw['quarantined'])} memory")
+    for c in sw["quarantined"][:30]:
+        print(f"    ⊘ [{c['id']}] {c['branch']} · {c['reason']} "
+              f"(score {c['score']}): {c['text']}")
+    if args.purge:
+        print(f"[+] purged {len(sw['purged'])} long-quarantined uncited memory")
+    elif sw["purgeable"]:
+        print(f"[i] {len(sw['purgeable'])} eligible for purge "
+              f"(quarantined >grace, never cited) — add --purge to delete")
+    return 0
+
+
+def cmd_restore(args):
+    """Un-quarantine a memory by id, or every memory from a branch."""
+    s, _ = _store()
+    n = s.restore(args.target) or s.restore_branch(args.target)
+    print(f"[+] restored {n} memory" if n else "nothing to restore for that id/branch.")
+    return 0
+
+
 def cmd_key(args):
     """Store an API key securely (~/.omni-memory/credentials.json, chmod 600)."""
     import getpass
@@ -339,6 +376,11 @@ def main(argv=None):
     sub.add_parser("branches")
     fg = sub.add_parser("forget"); fg.add_argument("id")
     us = sub.add_parser("used"); us.add_argument("id", nargs="+")
+    gc = sub.add_parser("gc")
+    gc.add_argument("--dry-run", action="store_true", help="preview, change nothing")
+    gc.add_argument("--purge", action="store_true",
+                    help="hard-delete long-quarantined, never-cited memory")
+    rs = sub.add_parser("restore"); rs.add_argument("target", help="memory id or branch")
     sub.add_parser("map")
     sub.add_parser("check")
     sub.add_parser("digest")
@@ -359,8 +401,8 @@ def main(argv=None):
         None: cmd_status, "status": cmd_status, "on": cmd_toggle, "off": cmd_toggle,
         "branch-aware": cmd_branch_aware, "remember": cmd_remember, "capture": cmd_capture,
         "inject": cmd_inject, "recall": cmd_recall, "branches": cmd_branches,
-        "forget": cmd_forget, "used": cmd_used, "map": cmd_map, "check": cmd_check,
-        "digest": cmd_digest,
+        "forget": cmd_forget, "used": cmd_used, "gc": cmd_gc, "restore": cmd_restore,
+        "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,
     }

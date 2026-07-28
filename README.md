@@ -50,6 +50,10 @@ build pass and artifacts.
   Falls back to file-level when tree-sitter isn't present.
 - **Clean** — an extraction-noise filter keeps aspirational prose and doc
   boilerplate out of the store.
+- **Self-cleaning** — memories stranded on **abandoned branches** (deleted
+  unmerged, or long dormant) and long-stale/uncited memories are auto-quarantined
+  (reversible), so false memory doesn't live forever. Memories the agent keeps
+  citing are shielded. `gc --dry-run` previews; hard-delete stays human-gated.
 - **Graph + dashboard** — `omni-memory ui` opens a local UI: browsable memory
   docs, the knowledge graph, and the repo/branch graph.
 
@@ -65,6 +69,8 @@ omni-memory branches       # git topology + per-branch memory
 omni-memory remember "…" [--kind decision|fact|flow|gotcha|todo|…]
 omni-memory forget <id>
 omni-memory used <id> …    # record a citation (feeds the ranker)
+omni-memory gc [--dry-run] [--purge]   # quarantine dead/false memory; purge is human-gated
+omni-memory restore <id|branch>        # un-quarantine
 omni-memory digest         # (re)write the MEMORY.md knowledge base
 omni-memory artifact [apimap|linkup|all]   # AI-written cross-reference docs
 omni-memory key <gemini|anthropic|openai>  # store a model key securely (chmod 600)
@@ -83,7 +89,8 @@ cloud, no paid data. See [`PLAN.md`](PLAN.md) for the full architecture and road
 ## Status
 Core is in: store · git provenance · branch-aware scoping · capture/inject/enforce
 · context-aware ranker (BM25F + code-graph proximity + citation feedback) ·
-symbol-level staleness · noise filter · **tree-sitter
+symbol-level staleness · noise filter · **memory hygiene** (abandoned-branch &
+false-memory auto-quarantine, human-gated purge) · **tree-sitter
 code graph** (Python/JS/TS, with a stdlib-`ast` fallback) · dashboard (knowledge
 graph + repo/branch graph). tree-sitter installs automatically on Python ≥3.10;
 on 3.9 the base install still works and graphs Python via `ast`. Roadmap:

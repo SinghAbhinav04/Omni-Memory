@@ -42,6 +42,15 @@ def list_branches(root: Path) -> list[str]:
     return [b for b in out.splitlines() if b]
 
 
+def tip_time(root: Path, branch: str) -> float:
+    """Unix time of a branch's tip commit (0 if unknown)."""
+    out = _git(root, "log", "-1", "--format=%at", branch)
+    try:
+        return float(out)
+    except ValueError:
+        return 0.0
+
+
 def branch_creator(root: Path, branch: str, base: str) -> tuple[str, float]:
     """(author, unix_time) of the branch's first unique commit vs base."""
     rng = f"{base}..{branch}" if base and base != branch else branch
@@ -70,14 +79,22 @@ def ahead_behind(root: Path, branch: str, base: str) -> tuple[int, int]:
     return 0, 0
 
 
-def merge_info(root: Path, branch: str, into: str) -> tuple[bool, str, float]:
-    """Is `branch` merged into `into`? Returns (merged, merge_commit, when)."""
-    # a branch sitting on the same commit as base isn't "merged", just fresh
-    if _git(root, "rev-parse", branch) == _git(root, "rev-parse", into):
-        return False, "", 0.0
-    merged_list = _git(root, "branch", "--merged", into).splitlines()
-    merged = any(b.strip().lstrip("* ").strip() == branch for b in merged_list)
-    if not merged:
+def merged_branches(root: Path, into: str) -> set:
+    """Branch names already merged into `into` (one call, hoisted for big repos)."""
+    out = _git(root, "branch", "--merged", into)
+    return {ln.strip().lstrip("* ").strip() for ln in out.splitlines() if ln.strip()}
+
+
+def merge_info(root: Path, branch: str, into: str,
+               merged_set: Optional[set] = None) -> tuple[bool, str, float]:
+    """Is `branch` merged into `into`? Returns (merged, merge_commit, when).
+
+    `merged_set`, when provided, is the precomputed set of branches merged into
+    `into` (one `git branch --merged` call hoisted out of the per-branch loop —
+    otherwise this is O(branches²) on big repos)."""
+    if merged_set is None:
+        merged_set = merged_branches(root, into)
+    if branch not in merged_set:
         return False, "", 0.0
     tip = _git(root, "rev-parse", branch)
     # find the merge commit on `into` that brought this branch in
@@ -94,21 +111,38 @@ def merge_info(root: Path, branch: str, into: str) -> tuple[bool, str, float]:
 
 
 def commits_on(root: Path, branch: str, base: str, limit: int = 200) -> list[dict]:
+    """Commits (with changed files) unique to `branch` vs `base`, in ONE git call.
+
+    A header line (prefixed with \\x1e) carries the metadata; the file names for
+    that commit follow on their own lines until the next header. This replaces a
+    per-commit `git show`, which was O(commits) subprocess spawns and hung on
+    large repos."""
     rng = f"{base}..{branch}" if base and base != branch else branch
+    # Plain-text marker (not a control char): str.splitlines() splits on \x1c-\x1e
+    # etc., which silently ate a record-separator marker here.
     out = _git(root, "log", rng, f"--max-count={limit}",
-               "--format=%H|%an|%at|%s")
-    rows = []
+               "--name-only", "--format=\x01OMNI\x01%H|%an|%at|%s")
+    rows: list[dict] = []
+    cur: Optional[dict] = None
     for line in out.splitlines():
-        parts = line.split("|", 3)
-        if len(parts) == 4:
-            sha, an, at, msg = parts
-            try:
-                date = float(at)
-            except ValueError:
-                date = 0.0
-            files = _git(root, "show", "--name-only", "--format=", sha).splitlines()
-            rows.append({"sha": sha, "author": an, "date": date, "message": msg,
-                         "files": [f for f in files if f]})
+        if line.startswith("\x01OMNI\x01"):
+            if cur:
+                rows.append(cur)
+            parts = line[6:].split("|", 3)
+            if len(parts) == 4:
+                sha, an, at, msg = parts
+                try:
+                    date = float(at)
+                except ValueError:
+                    date = 0.0
+                cur = {"sha": sha, "author": an, "date": date, "message": msg,
+                       "files": []}
+            else:
+                cur = None
+        elif line.strip() and cur is not None:
+            cur["files"].append(line.strip())
+    if cur:
+        rows.append(cur)
     return rows
 
 
@@ -118,11 +152,16 @@ def snapshot(root: Path) -> dict:
         return {"branches": [], "commits": [], "default": "main", "current": "main"}
     base = default_branch(root)
     cur = current_branch(root)
+    merged_set = merged_branches(root, base)  # one call, not per-branch
     branches, commits = [], []
     for b in list_branches(root):
         creator, created_at = branch_creator(root, b, base if b != base else "")
         ahead, behind = (0, 0) if b == base else ahead_behind(root, b, base)
-        merged, mc, when = (False, "", 0.0) if b == base else merge_info(root, b, base)
+        # a branch with no unique commits sitting on base is "fresh", not merged
+        if b == base or (ahead == 0 and behind == 0):
+            merged, mc, when = False, "", 0.0
+        else:
+            merged, mc, when = merge_info(root, b, base, merged_set=merged_set)
         branches.append({
             "name": b, "creator": creator, "created_at": created_at,
             "base_branch": None if b == base else base,

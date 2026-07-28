@@ -106,7 +106,8 @@ class Store:
         have = {r["name"] for r in self.db.execute("PRAGMA table_info(memory)")}
         for col, decl in (("stale", "INTEGER DEFAULT 0"),
                           ("stale_since", "REAL"), ("stale_files", "TEXT"),
-                          ("uses", "INTEGER DEFAULT 0"), ("last_used", "REAL")):
+                          ("uses", "INTEGER DEFAULT 0"), ("last_used", "REAL"),
+                          ("quarantined_at", "REAL"), ("quarantine_reason", "TEXT")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE memory ADD COLUMN {col} {decl}")
 
@@ -196,6 +197,53 @@ class Store:
             self.db.execute(
                 "UPDATE memory SET stale=?, stale_since=?, stale_files=? WHERE id=?",
                 (1 if stale else 0, since, json.dumps(files or []), mem_id))
+
+    # -- lifecycle / eviction ----------------------------------------------
+    def update_branch_status(self, name: str, status: str) -> None:
+        self.db.execute("UPDATE branches SET status=? WHERE name=?", (status, name))
+        self.db.commit()
+
+    def reanchor_branch(self, frm: str, to: str) -> int:
+        """Re-tag a merged branch's active memories onto the base branch."""
+        cur = self.db.execute(
+            "UPDATE memory SET branch=? WHERE branch=? AND status='active'", (to, frm))
+        self.db.commit()
+        return cur.rowcount
+
+    def quarantine(self, mem_id: str, reason: str) -> None:
+        self.db.execute(
+            "UPDATE memory SET status='abandoned', quarantined_at=?, "
+            "quarantine_reason=? WHERE id=?", (time.time(), reason, mem_id))
+        self.db.commit()
+
+    def restore(self, mem_id: str) -> int:
+        cur = self.db.execute(
+            "UPDATE memory SET status='active', quarantined_at=NULL, "
+            "quarantine_reason=NULL WHERE id=? AND status='abandoned'", (mem_id,))
+        self.db.commit()
+        return cur.rowcount
+
+    def restore_branch(self, branch: str) -> int:
+        cur = self.db.execute(
+            "UPDATE memory SET status='active', quarantined_at=NULL, "
+            "quarantine_reason=NULL WHERE branch=? AND status='abandoned'", (branch,))
+        self.db.commit()
+        return cur.rowcount
+
+    def purgeable(self, before: float) -> list[dict]:
+        """Long-quarantined, never-cited memories eligible for hard deletion."""
+        rows = self.db.execute(
+            "SELECT id, kind, branch, text, quarantined_at FROM memory "
+            "WHERE status='abandoned' AND quarantined_at IS NOT NULL "
+            "AND quarantined_at < ? AND COALESCE(uses,0)=0", (before,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete(self, ids: list[str]) -> int:
+        if not ids:
+            return 0
+        cur = self.db.executemany("DELETE FROM memory WHERE id=?", [(i,) for i in ids])
+        self.db.commit()
+        return cur.rowcount
 
     def forget(self, mem_id: str) -> bool:
         cur = self.db.execute("UPDATE memory SET status='abandoned',updated=? WHERE id=?",
