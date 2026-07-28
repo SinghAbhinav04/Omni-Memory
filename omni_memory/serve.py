@@ -50,7 +50,15 @@ def _handler(store: Store, root: Path):
             if u.path == "/api/graph":
                 return self._send(200, json.dumps(graphbuild.build_graph(store, root)))
             if u.path == "/api/branches":
-                branchmod.sync_git(store, root)
+                # Read cached topology (synced at startup). Re-syncing on every
+                # request re-ran the full git snapshot + staleness recompute,
+                # which hung the Repo Graph tab on large repos. Pass ?sync=1 to
+                # force a refresh.
+                if q.get("sync"):
+                    try:
+                        branchmod.sync_git(store, root)
+                    except Exception:  # noqa: BLE001
+                        pass
                 return self._send(200, json.dumps({
                     "branches": store.branches(),
                     "current": gitmeta.current_branch(root),
@@ -75,10 +83,20 @@ def _handler(store: Store, root: Path):
     return H
 
 
+def _safe_sync(store: Store, root: Path) -> None:
+    try:
+        branchmod.sync_git(store, root)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_ui(port: int = 7777) -> int:
+    import threading
     root = find_project_root()
     store = Store(root)
-    branchmod.sync_git(store, root)
+    # Sync git topology in the background so the dashboard opens instantly even on
+    # a large repo; endpoints read cached data and repopulate as the sync lands.
+    threading.Thread(target=lambda: _safe_sync(store, root), daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", port), _handler(store, root))
     url = f"http://127.0.0.1:{port}/"
     print(f"[+] OmniMemory dashboard → {url}  (Ctrl+C to stop)")

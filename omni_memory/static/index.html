@@ -58,7 +58,14 @@
 </div>
 <script>
 const view = document.getElementById('view'), hdr = document.getElementById('hdr');
-async function api(p){ const r = await fetch(p); return r.json(); }
+async function api(p){
+  const c = new AbortController(); const t = setTimeout(()=>c.abort(), 20000);
+  try {
+    const r = await fetch(p, {signal:c.signal});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
 function esc(s){ return (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
 document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{
@@ -189,9 +196,13 @@ async function renderGraph(){
 }
 
 async function renderBranches(){
-  const d = await api('/api/branches');
+  let d = await api('/api/branches');
+  let branches = d.branches || [];
+  if(!branches.length){                       // cache empty → force a git sync once
+    view.innerHTML = '<span class="hint">syncing git topology…</span>';
+    d = await api('/api/branches?sync=1'); branches = d.branches || [];
+  }
   hdr.textContent = 'branch: ' + d.current + ' · default: ' + d.default;
-  const branches = d.branches || [];
   if(!branches.length){ view.innerHTML='<span class="hint">no branches recorded yet — run <code>omni-memory branches</code> or work in a git repo.</span>'; return; }
 
   // ── git-DAG lane diagram: default branch is the spine, others diverge ──
