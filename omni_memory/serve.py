@@ -22,7 +22,7 @@ from .store import Store, find_project_root
 STATIC = Path(__file__).parent / "static" / "index.html"
 
 
-def _handler(store: Store, root: Path):
+def _handler(root: Path):
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
             pass
@@ -36,6 +36,19 @@ def _handler(store: Store, root: Path):
             self.wfile.write(data)
 
         def do_GET(self):
+            try:
+                return self._route()
+            except Exception as e:  # noqa: BLE001 — never drop the connection
+                try:
+                    self._send(500, json.dumps({"error": str(e)}))
+                except Exception:  # noqa: BLE001
+                    pass
+
+        def _route(self):
+            # A fresh Store (SQLite connection) per request: the threading server
+            # runs requests on worker threads, and one shared connection isn't
+            # safe for concurrent use (caused intermittent "Failed to fetch").
+            store = Store(root)
             u = urlparse(self.path)
             q = parse_qs(u.query)
             if u.path in ("/", "/index.html"):
@@ -97,7 +110,7 @@ def run_ui(port: int = 7777) -> int:
     # Sync git topology in the background so the dashboard opens instantly even on
     # a large repo; endpoints read cached data and repopulate as the sync lands.
     threading.Thread(target=lambda: _safe_sync(store, root), daemon=True).start()
-    srv = ThreadingHTTPServer(("127.0.0.1", port), _handler(store, root))
+    srv = ThreadingHTTPServer(("127.0.0.1", port), _handler(root))
     url = f"http://127.0.0.1:{port}/"
     print(f"[+] OmniMemory dashboard → {url}  (Ctrl+C to stop)")
     try:
