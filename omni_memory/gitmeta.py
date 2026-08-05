@@ -5,6 +5,7 @@ Repo Graph view.
 """
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -37,9 +38,41 @@ def default_branch(root: Path) -> str:
     return "main"
 
 
-def list_branches(root: Path) -> list[str]:
+def list_branches(root: Path, include_remotes: bool = False) -> list[str]:
+    """Local branches (refs/heads). With include_remotes, also append remote-only
+    branches (e.g. `origin/feature` that was pushed but never checked out locally)
+    so the topology reflects every branch that exists, not just the checked-out
+    ones. Remote refs are returned by their full short name (`origin/x`) — which is
+    still a resolvable git ref — and skipped when a local branch shadows them."""
     out = _git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads")
-    return [b for b in out.splitlines() if b]
+    locals_ = [b for b in out.splitlines() if b]
+    if not include_remotes:
+        return locals_
+    localset = set(locals_)
+    rout = _git(root, "for-each-ref", "--format=%(refname:short)", "refs/remotes")
+    extra = []
+    for r in (x.strip() for x in rout.splitlines()):
+        if not r or r.endswith("/HEAD"):
+            continue
+        short = r.split("/", 1)[1] if "/" in r else r  # strip remote prefix
+        if short in localset or short == "HEAD":
+            continue
+        extra.append(r)
+    return locals_ + extra
+
+
+def state_signature(root: Path) -> str:
+    """A cheap fingerprint of git state that changes on anything the dashboard
+    cares about: new commit, branch create/delete/switch, remote update, or a
+    working-tree edit. The auto-refresh watcher polls this and only does the
+    expensive rebuild when it moves — so it stays live without busy-work."""
+    if not is_repo(root):
+        return ""
+    head = _git(root, "rev-parse", "HEAD")
+    refs = _git(root, "for-each-ref", "--format=%(refname) %(objectname)",
+                "refs/heads", "refs/remotes")
+    status = _git(root, "status", "--porcelain")
+    return hashlib.sha1(f"{head}\n{refs}\n{status}".encode()).hexdigest()
 
 
 def tip_time(root: Path, branch: str) -> float:
@@ -154,7 +187,7 @@ def snapshot(root: Path) -> dict:
     cur = current_branch(root)
     merged_set = merged_branches(root, base)  # one call, not per-branch
     branches, commits = [], []
-    for b in list_branches(root):
+    for b in list_branches(root, include_remotes=True):
         creator, created_at = branch_creator(root, b, base if b != base else "")
         ahead, behind = (0, 0) if b == base else ahead_behind(root, b, base)
         # a branch with no unique commits sitting on base is "fresh", not merged

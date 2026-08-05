@@ -17,7 +17,9 @@ omni-memory on | off          # enable/disable the memory layer
 omni-memory branch-aware      # toggle branch-scoped memory
 omni-memory map               # (re)build the knowledge graph + code graph (tree-sitter)
 omni-memory check             # re-anchor memories vs git; flag ⚠ stale (symbol-level)
-omni-memory ui [--port]       # open the local dashboard (graph + memory docs)
+omni-memory ui [--port]       # open the local dashboard — auto-updates itself
+                              #   (watches git + files; branches, graph, code
+                              #    graph & staleness refresh live, no re-running)
 omni-memory recall <query>    # query memory instead of grepping
 omni-memory branches          # git topology + per-branch memory
 omni-memory remember "<text>" [--kind decision|fact|flow|gotcha|todo]

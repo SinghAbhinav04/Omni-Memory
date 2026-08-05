@@ -68,9 +68,10 @@ async function api(p){
 }
 function esc(s){ return (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
+let activeTab = 'memory';
 document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{
   document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on'));
-  a.classList.add('on'); render(a.dataset.tab);
+  a.classList.add('on'); activeTab = a.dataset.tab; render(activeTab);
 });
 
 async function render(tab){
@@ -230,6 +231,29 @@ async function renderBranches(){
   view.innerHTML = `<svg viewBox="0 0 ${Wsvg} ${H}" style="height:${H}px;max-width:${Wsvg}px">${P.join('')}</svg>`;
 }
 
-(async()=>{ render('memory'); })();
+// ── auto-refresh: the server rebuilds on git/file changes; we poll a tiny
+//    signature endpoint and re-render the open tab whenever it moves. No manual
+//    commands, no page reload. We hold off while the user is typing in a search
+//    box so we don't yank the field out from under them.
+let lastSig = null;
+async function poll(){
+  try {
+    const s = await api('/api/state');
+    if(s.sig && s.sig !== lastSig){
+      const typing = document.activeElement && document.activeElement.classList.contains('search');
+      if(lastSig !== null && !typing){ render(activeTab); }
+      if(!typing) lastSig = s.sig;
+    }
+    setLive(true);
+  } catch(e){ setLive(false); }
+}
+function setLive(ok){
+  let dot = document.getElementById('live');
+  if(!dot){ dot = document.createElement('span'); dot.id='live';
+    dot.style.cssText='margin-left:auto;font-size:11px;color:#6c6c72;display:flex;align-items:center;gap:5px';
+    document.querySelector('nav').appendChild(dot); }
+  dot.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:${ok?'#4ade80':'#71717a'};display:inline-block"></span>${ok?'live · auto-updating':'reconnecting…'}`;
+}
+(async()=>{ render('memory'); poll(); setInterval(poll, 3000); })();
 </script>
 </body></html>

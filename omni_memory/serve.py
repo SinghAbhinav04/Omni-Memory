@@ -11,6 +11,8 @@ The same data is exposed over MCP for agents (P1, see docs). Endpoints:
 from __future__ import annotations
 
 import json
+import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +22,10 @@ from . import branch as branchmod, gitmeta, graphbuild
 from .store import Store, find_project_root
 
 STATIC = Path(__file__).parent / "static" / "index.html"
+
+# Shared with the dashboard: last known git fingerprint + when the watcher last
+# rebuilt. The client polls /api/state and re-renders when `sig` moves.
+_STATE = {"sig": "", "refreshed_at": 0.0}
 
 
 def _handler(root: Path):
@@ -76,6 +82,9 @@ def _handler(root: Path):
                     "branches": store.branches(),
                     "current": gitmeta.current_branch(root),
                     "default": store.get_meta("default_branch", "main")}))
+            if u.path == "/api/state":
+                # Tiny endpoint the dashboard polls to know when to re-render.
+                return self._send(200, json.dumps(_STATE))
             if u.path == "/api/commits":
                 return self._send(200, json.dumps(store.commits()))
             if u.path == "/api/codegraph":
@@ -96,20 +105,47 @@ def _handler(root: Path):
     return H
 
 
-def _safe_sync(store: Store, root: Path) -> None:
+def _refresh(root: Path) -> None:
+    """One full rebuild (code graph + topology + staleness), guarded. Publishes
+    the fresh signature only after the build completes, so the dashboard's poll
+    never re-renders against a half-built graph."""
     try:
-        branchmod.sync_git(store, root)
+        branchmod.full_refresh(Store(root), root)
+        _STATE["sig"] = gitmeta.state_signature(root)
+        _STATE["refreshed_at"] = time.time()
     except Exception:  # noqa: BLE001
         pass
 
 
+def _watch(root: Path, stop: threading.Event, interval: float = 4.0) -> None:
+    """Poll git state and rebuild whenever it moves, so the dashboard stays live
+    with zero manual commands. Debounced: a change must settle for one cycle
+    before we rebuild, so we don't thrash mid edit-burst. Runs an initial refresh
+    on startup regardless."""
+    last = None
+    pending = object()  # sentinel: forces the first observed sig to settle first
+    while not stop.is_set():
+        try:
+            sig = gitmeta.state_signature(root)
+        except Exception:  # noqa: BLE001
+            stop.wait(interval)
+            continue
+        if last is None:                 # cold start → always build once
+            _refresh(root)
+            last = sig
+        elif sig != last and sig == pending:
+            _refresh(root)               # stable change → rebuild
+            last = sig
+        pending = sig
+        stop.wait(interval)
+
+
 def run_ui(port: int = 7777) -> int:
-    import threading
     root = find_project_root()
-    store = Store(root)
-    # Sync git topology in the background so the dashboard opens instantly even on
-    # a large repo; endpoints read cached data and repopulate as the sync lands.
-    threading.Thread(target=lambda: _safe_sync(store, root), daemon=True).start()
+    # Continuously keep the code graph, branches, and staleness fresh in the
+    # background; the dashboard just reads the results and re-renders on change.
+    stop = threading.Event()
+    threading.Thread(target=lambda: _watch(root, stop), daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", port), _handler(root))
     url = f"http://127.0.0.1:{port}/"
     print(f"[+] OmniMemory dashboard → {url}  (Ctrl+C to stop)")
@@ -121,4 +157,6 @@ def run_ui(port: int = 7777) -> int:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\n[+] dashboard stopped.")
+    finally:
+        stop.set()
     return 0

@@ -93,9 +93,16 @@ class Store:
     def __init__(self, root: Optional[Path] = None):
         self.dir = store_dir(root)
         # check_same_thread=False: the dashboard server handles requests on
-        # worker threads but shares one read-mostly connection.
-        self.db = sqlite3.connect(self.dir / "omni.db", check_same_thread=False)
+        # worker threads. WAL + a busy timeout let the background auto-refresh
+        # watcher rebuild the code graph while HTTP requests read/write on their
+        # own connections without hitting "database is locked" (was surfacing as
+        # intermittent 500s / a stale dashboard).
+        self.db = sqlite3.connect(self.dir / "omni.db",
+                                  check_same_thread=False, timeout=10)
         self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA busy_timeout=10000")
+        self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
         self._migrate()
         self.db.commit()

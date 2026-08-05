@@ -24,6 +24,19 @@ def sync_git(store: Store, root: Path) -> dict:
     return snap
 
 
+def full_refresh(store: Store, root: Path) -> dict:
+    """Everything the dashboard shows, rebuilt from the current repo state:
+    the code graph, git topology, branch classification, and symbol-level
+    staleness. This is what the auto-refresh watcher runs so the user never has
+    to invoke `map`/`check`/`branches` by hand."""
+    try:
+        from .graph import build as codegraph
+        codegraph.build_code_graph(store, root)
+    except Exception:  # noqa: BLE001 — fall back to file-level staleness
+        pass
+    return sync_git(store, root)
+
+
 def classify_branches(store: Store, root: Path) -> list[tuple]:
     """Keep branch statuses honest so eviction can act on them:
 
@@ -36,7 +49,7 @@ def classify_branches(store: Store, root: Path) -> list[tuple]:
     """
     if not gitmeta.is_repo(root):
         return []
-    live = set(gitmeta.list_branches(root))
+    live = set(gitmeta.list_branches(root, include_remotes=True))
     base = store.get_meta("default_branch") or gitmeta.default_branch(root)
     cur = gitmeta.current_branch(root)
     now = time.time()
