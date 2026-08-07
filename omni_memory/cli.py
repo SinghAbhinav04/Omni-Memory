@@ -426,6 +426,48 @@ def cmd_bind(args):
     return install.bind(ide=args.ide or "auto")
 
 
+def cmd_doctor(args):
+    """`doctor` — diagnose the setup: git, store, layer state, tree-sitter, code
+    graph, memory counts, AGENTS.md, hooks, and AI provider. Each line says how to
+    fix a ✗/⚠. Run this first when something isn't working."""
+    s, root = _store()
+    from . import llm
+    from .graph import extract
+
+    def line(ok, label, detail, fix=""):
+        mark = {True: "✓", False: "✗", None: "⚠"}[ok]
+        print(f"  {mark} {label}: {detail}" + (f"   → {fix}" if fix and ok is not True else ""))
+
+    print(f"OmniMemory {__version__}  ·  doctor  ·  project: {root.name}")
+    print(f"  store: {s.dir}")
+    is_repo = gitmeta.is_repo(root)
+    line(is_repo, "git repository", "yes" if is_repo else "NOT a git repo",
+         "run `git init` (memory is branch-anchored)")
+    line(s.get_meta("enabled", True), "memory layer", "ON" if s.get_meta("enabled", True) else "OFF",
+         "run `omni-memory on`")
+    ts = extract.available()
+    line(True if ts else None, "tree-sitter", "installed (multi-language graph)" if ts
+         else "absent — Python-only via stdlib ast", "pip install omni-memory-agent on Python ≥3.10")
+    nodes = len(s.code_graph()[0])
+    line(nodes > 0, "code graph", f"{nodes} symbols", "run `omni-memory map`")
+    c = s.counts()
+    active = c.get("active", 0)
+    stale = s.db.execute("SELECT COUNT(*) n FROM memory WHERE status='active' AND stale=1").fetchone()["n"]
+    line(active > 0, "memories", f"{active} active" + (f", ⚠ {stale} stale" if stale else ""),
+         "capture some (work a session) or `omni-memory build`")
+    agents = (root / "AGENTS.md").exists()
+    line(agents, "AGENTS.md", "present (cross-IDE context)" if agents else "missing",
+         "run `omni-memory bind`")
+    settings = root / ".claude" / "settings.json"
+    hooked = settings.exists() and "omni_memory hook" in settings.read_text()
+    line(hooked, "Claude Code hooks", "wired" if hooked else "not installed",
+         "run `omni-memory bind claude-code`")
+    prov = llm.provider()
+    line(True if prov else None, "AI provider", prov or "none (headless capture off)",
+         "set GEMINI_API_KEY / ANTHROPIC_API_KEY for headless capture")
+    return 0
+
+
 def main(argv=None):
     import argparse
     p = argparse.ArgumentParser(prog="omni-memory",
@@ -469,6 +511,7 @@ def main(argv=None):
     bn.add_argument("ide", nargs="?", default="auto",
                     choices=["auto", "claude-code", "antigravity"],
                     help="which IDE to bind (default: auto-detect)")
+    sub.add_parser("doctor")
 
     args = p.parse_args(argv)
     dispatch = {
@@ -479,7 +522,7 @@ def main(argv=None):
         "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,
-        "flush": cmd_flush, "bind": cmd_bind,
+        "flush": cmd_flush, "bind": cmd_bind, "doctor": cmd_doctor,
     }
     return dispatch[args.cmd](args)
 
