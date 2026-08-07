@@ -35,8 +35,16 @@ ENFORCE_RULES = (
 )
 
 
+# Keep the per-prompt injection cheap: it rides on EVERY message, so it must be
+# a tight, high-signal budget rather than a memory dump.
+_MAX_ITEMS = 10          # hard cap on injected memories
+_WIDEN_ITEMS = 5         # when nothing matched, only a few top memories
+_TEXT_CAP = 180          # truncate long memory text
+_CHAR_BUDGET = 1800      # ~450 tokens for the whole block
+
+
 def build_block(store: Store, root: Path, query: str = "",
-                files: Optional[list[str]] = None, limit: int = 20) -> str:
+                files: Optional[list[str]] = None, limit: int = _MAX_ITEMS) -> str:
     cur, base = branchmod.scope(store, root)
     branch = None if cur == "*" else cur
     fip = _files_in_play(root, query, files)
@@ -44,23 +52,33 @@ def build_block(store: Store, root: Path, query: str = "",
     context = proximity.context_from_files(store, fip)
     mems = store.memories(branch=branch, base=base, files=fip or None,
                           query=query, context=context, limit=limit)
-    if not mems and query:  # widen if the query filter was too tight
-        mems = store.memories(branch=branch, base=base, limit=limit)
+    widened = False
+    if not mems and query:  # nothing matched: inject only a FEW top memories,
+        widened = True      # not a full 20-item dump on an unrelated prompt
+        mems = store.memories(branch=branch, base=base, limit=_WIDEN_ITEMS)
     if not mems:
         return ""
     scope_label = "all branches" if cur == "*" else (
         f"branch '{cur}'" + (f" + base '{base}'" if base else ""))
     lines = [
         "=== VERIFIED PROJECT MEMORY (OmniMemory) ===",
-        f"scope: {scope_label} · {len(mems)} item(s)",
+        f"scope: {scope_label}" + (" · top general memories" if widened else ""),
         ENFORCE_RULES,
         "",
     ]
+    used, budget = 0, _CHAR_BUDGET
     for m in mems:
         tag = f"[{m['id']}]"
-        where = (" · " + ", ".join(m["files"][:3])) if m["files"] else ""
+        where = (" · " + ", ".join(m["files"][:2])) if m["files"] else ""
         br = "" if cur != "*" else f" ({m['branch']})"
         stale = " ⚠STALE" if m.get("stale") else ""
-        lines.append(f"{tag} {m['kind']}{br}{stale}: {m['text']}{where}")
+        text = m["text"] if len(m["text"]) <= _TEXT_CAP else m["text"][:_TEXT_CAP - 1] + "…"
+        line = f"{tag} {m['kind']}{br}{stale}: {text}{where}"
+        if used and budget - len(line) < 0:   # keep at least one; then honor budget
+            break
+        lines.append(line)
+        budget -= len(line)
+        used += 1
+    lines[1] = lines[1].replace("scope:", f"scope: {used} item(s) ·", 1)
     lines.append("=== END MEMORY — cite [id]s you used ===")
     return "\n".join(lines)
