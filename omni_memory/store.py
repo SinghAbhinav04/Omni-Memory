@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS flows(
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS code_nodes(
   id TEXT PRIMARY KEY, kind TEXT, name TEXT, file TEXT,
-  line_start INTEGER, line_end INTEGER, parent TEXT);
+  line_start INTEGER, line_end INTEGER, parent TEXT,
+  signature TEXT, doc TEXT, raises TEXT, calls TEXT);
 CREATE TABLE IF NOT EXISTS code_edges(src TEXT, dst TEXT, rel TEXT);
 CREATE INDEX IF NOT EXISTS idx_mem_branch ON memory(branch);
 CREATE INDEX IF NOT EXISTS idx_mem_status ON memory(status);
@@ -126,6 +127,10 @@ class Store:
                           ("quarantined_at", "REAL"), ("quarantine_reason", "TEXT")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE memory ADD COLUMN {col} {decl}")
+        cn = {r["name"] for r in self.db.execute("PRAGMA table_info(code_nodes)")}
+        for col in ("signature", "doc", "raises", "calls"):
+            if col not in cn:
+                self.db.execute(f"ALTER TABLE code_nodes ADD COLUMN {col} TEXT")
 
     # -- meta / toggles -----------------------------------------------------
     def get_meta(self, key: str, default: Any = None) -> Any:
@@ -283,13 +288,20 @@ class Store:
         return d
 
     # -- code graph ---------------------------------------------------------
+    _CODE_COLS = ("id", "kind", "name", "file", "line_start", "line_end",
+                  "parent", "signature", "doc", "raises", "calls")
+
     def replace_code_graph(self, nodes: list[dict], edges: list[dict]) -> None:
         self.db.execute("DELETE FROM code_nodes")
         self.db.execute("DELETE FROM code_edges")
+        cols = self._CODE_COLS
+        ph = ",".join("?" * len(cols))
         self.db.executemany(
-            "INSERT OR REPLACE INTO code_nodes VALUES(?,?,?,?,?,?,?)",
+            f"INSERT OR REPLACE INTO code_nodes({','.join(cols)}) VALUES({ph})",
             [(n["id"], n["kind"], n["name"], n["file"], n["line_start"],
-              n["line_end"], n.get("parent")) for n in nodes])
+              n["line_end"], n.get("parent"), n.get("signature", ""),
+              n.get("doc", ""), json.dumps(n.get("raises", []) or []),
+              json.dumps(n.get("calls", []) or [])) for n in nodes])
         self.db.executemany("INSERT INTO code_edges VALUES(?,?,?)",
                             [(e["src"], e["dst"], e["rel"]) for e in edges])
         self.db.commit()
@@ -298,6 +310,44 @@ class Store:
         nodes = [dict(r) for r in self.db.execute("SELECT * FROM code_nodes")]
         edges = [dict(r) for r in self.db.execute("SELECT * FROM code_edges")]
         return nodes, edges
+
+    def symbol_dossier(self, sid: str) -> Optional[dict]:
+        """Everything the node-detail inspector shows for one code symbol:
+        its signature/doc/raises, the symbols it calls (downstream, resolved +
+        clickable) and the symbols that call it (upstream), plus raw call names
+        (incl. external ones like emits/publishes that don't resolve in-repo)."""
+        row = self.db.execute("SELECT * FROM code_nodes WHERE id=?", (sid,)).fetchone()
+        if not row:
+            return None
+        n = dict(row)
+        for k in ("raises", "calls"):
+            try:
+                n[k] = json.loads(n.get(k) or "[]")
+            except Exception:  # noqa: BLE001
+                n[k] = []
+
+        def _mini(ids):
+            if not ids:
+                return []
+            q = ",".join("?" * len(ids))
+            rows = self.db.execute(
+                f"SELECT id,name,kind,file,line_start,signature FROM code_nodes "
+                f"WHERE id IN ({q})", list(ids)).fetchall()
+            return [dict(r) for r in rows]
+
+        down = [r["dst"] for r in self.db.execute(
+            "SELECT dst FROM code_edges WHERE src=? AND rel='calls'", (sid,))]
+        up = [r["src"] for r in self.db.execute(
+            "SELECT src FROM code_edges WHERE dst=? AND rel='calls'", (sid,))]
+        bases = [r["dst"] for r in self.db.execute(
+            "SELECT dst FROM code_edges WHERE src=? AND rel='inherits'", (sid,))]
+        children = [r["dst"] for r in self.db.execute(
+            "SELECT dst FROM code_edges WHERE src=? AND rel='contains'", (sid,))]
+        n["calls_out"] = _mini(down)
+        n["called_by"] = _mini(up)
+        n["inherits"] = _mini(bases)
+        n["contains"] = _mini(children)
+        return n
 
     def flush(self, scope: str = "all") -> dict:
         """Wipe stored data so it can be rebuilt from scratch. Settings in `meta`

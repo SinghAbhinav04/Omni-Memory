@@ -41,6 +41,47 @@
   .md pre{background:#0e0e10;border:1px solid #1c1c1f;border-radius:8px;padding:12px;overflow:auto}
   .md pre code{border:none;background:none}
   .md a{color:#9db}.md svg{max-width:100%;background:#0e0e10;border:1px solid #1c1c1f;border-radius:8px}
+
+  /* ── kind color system (shared by memory cards + graph nodes) ── */
+  .badge{display:inline-block;padding:1px 7px;border-radius:6px;font-size:9px;
+    text-transform:uppercase;letter-spacing:.07em;font-weight:600;vertical-align:middle}
+  .k-decision{background:#3a2f10;color:#f0c674}.k-gotcha{background:#3a1414;color:#f2a1a1}
+  .k-flow{background:#0e2a2f;color:#7fd7e0}.k-fact{background:#1a2436;color:#9db8e0}
+  .k-endpoint{background:#102a18;color:#8fdca6}.k-todo{background:#2a2410;color:#d8c98a}
+  .k-class{background:#2a1f3a;color:#c9a9f0}.k-function{background:#10261c;color:#7fe0a8}
+  .k-method{background:#122436;color:#8fc7f0}.k-file{background:#1c1c22;color:#9a9aa2}
+  .k-assumption,.k-concept,.k-component,.k-event,.k-db{background:#20202a;color:#b0b0b8}
+
+  /* ── inspector: slide-in node dossier ── */
+  #insp{position:fixed;top:0;right:0;width:380px;max-width:90vw;height:100vh;
+    background:#0e0e11;border-left:1px solid #23232a;box-shadow:-18px 0 40px rgba(0,0,0,.45);
+    transform:translateX(100%);transition:transform .22s cubic-bezier(.2,.8,.2,1);
+    z-index:40;overflow-y:auto;padding:0}
+  #insp.open{transform:translateX(0)}
+  #insp .ihead{position:sticky;top:0;background:#0e0e11;border-bottom:1px solid #1c1c1f;
+    padding:16px 18px 12px;z-index:1}
+  #insp .iclose{position:absolute;top:12px;right:14px;color:#7c7c82;cursor:pointer;
+    font-size:18px;line-height:1;border:none;background:none}
+  #insp .iname{font-size:15px;color:#f2f2f4;font-weight:600;word-break:break-word;margin:6px 0 2px}
+  #insp .ipath{font-size:11px;color:#6c6c72;word-break:break-all}
+  #insp .ibody{padding:14px 18px 40px}
+  #insp .sig{background:#0a0a0c;border:1px solid #1c1c1f;border-radius:8px;padding:9px 11px;
+    margin:2px 0 14px;color:#cde8d6;font-size:12px;white-space:pre-wrap;word-break:break-word}
+  #insp .sec{margin:16px 0 6px;color:#7c7c82;font-size:10px;text-transform:uppercase;letter-spacing:.09em}
+  #insp .doc{color:#c4c4c8;font-size:12.5px;line-height:1.55;border-left:2px solid #2b2b31;padding-left:10px}
+  #insp .ref{display:flex;align-items:center;gap:8px;padding:6px 9px;margin:4px 0;border-radius:7px;
+    background:#111114;border:1px solid #1c1c1f;cursor:pointer;font-size:12px;color:#d0d0d4}
+  #insp .ref:hover{background:#16161a;border-color:#2f2f36}
+  #insp .ref .mono{color:#8a8a90;font-size:10px;margin-left:auto}
+  .pill{display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;margin:0 6px 6px 0}
+  .pill-raise{background:#2a1414;color:#f0a5a5;border:1px solid #3a1c1c}
+  .pill-emit{background:#2a2410;color:#e6cf8a;border:1px solid #3a3218}
+  .pill-call{background:#14202a;color:#9cc9e0;border:1px solid #1c2f3a}
+  .empty{color:#55555c;font-size:12px;font-style:italic}
+  nav a#flushbtn{color:#a86b6b;margin-top:8px}nav a#flushbtn:hover{color:#e08a8a}
+  .stat{display:flex;gap:18px;margin-bottom:14px;flex-wrap:wrap}
+  .stat .s{background:#0e0e10;border:1px solid #1c1c1f;border-radius:9px;padding:8px 14px;min-width:78px}
+  .stat .s b{display:block;font-size:19px;color:#f0f0f2}.stat .s span{font-size:10px;color:#6c6c72;text-transform:uppercase;letter-spacing:.06em}
 </style></head>
 <body>
 <div id="app">
@@ -48,7 +89,8 @@
     <h1>◇ OmniMemory</h1>
     <a data-tab="memory" class="on">Memory</a>
     <a data-tab="docs">Docs</a>
-    <a data-tab="graph">Graph</a>
+    <a data-tab="graph">Memory Graph</a>
+    <a data-tab="code">Code Graph</a>
     <a data-tab="branches">Repo Graph</a>
     <a id="flushbtn" title="Wipe stored memory/graph so it can be rebuilt from scratch">Flush</a>
   </nav>
@@ -56,6 +98,7 @@
     <header id="hdr">loading…</header>
     <div class="wrap" id="view"></div>
   </main>
+  <aside id="insp"></aside>
 </div>
 <script>
 const view = document.getElementById('view'), hdr = document.getElementById('hdr');
@@ -93,9 +136,11 @@ document.getElementById('flushbtn').onclick = async ()=>{
 async function render(tab){
   view.innerHTML = '<span class="hint">loading…</span>';
   try {
+    closeInspector();
     if(tab==='memory') return await renderMemory();
     if(tab==='docs') return await renderDocs();
     if(tab==='graph') return await renderGraph();
+    if(tab==='code') return await renderCode();
     if(tab==='branches') return await renderBranches();
   } catch(e){
     view.innerHTML = '<span class="hint">render error in <b>'+esc(tab)+'</b>: '+esc(e.message)+
@@ -129,11 +174,19 @@ async function renderDocs(){
 async function renderMemory(){
   const mems = await api('/api/memories');
   hdr.textContent = mems.length + ' memories';
-  view.innerHTML = '<input class="search" placeholder="search memory…">' +
+  const counts = {}; mems.forEach(m=>counts[m.kind]=(counts[m.kind]||0)+1);
+  const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  view.innerHTML =
+    `<div class="stat">${top.map(([k,n])=>`<div class="s"><b>${n}</b><span>${esc(k)}</span></div>`).join('')||''}</div>`+
+    '<input class="search" placeholder="search memory…">' +
     '<div id="list"></div>';
   const list = document.getElementById('list');
   const draw = f => { list.innerHTML = mems.filter(m=>!f||m.text.toLowerCase().includes(f))
-    .map(m=>`<div class="mem"><span class="k">${esc(m.kind)} · ${esc(m.branch)} · [${m.id}]</span>
+    .map(m=>`<div class="mem">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+        ${m.kind?`<span class="badge k-${esc(m.kind)}">${esc(m.kind)}</span>`:''}
+        <span class="k" style="letter-spacing:.04em">${esc(m.branch)}${m.stale?' · ⚠STALE':''}</span>
+        <span class="k" style="margin-left:auto">[${m.id}]</span></div>
       <div class="t">${esc(m.text)}</div>
       ${(m.files||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join('')}</div>`).join('')
       || '<span class="hint">no memories yet — work in a session or run: omni-memory remember "…"</span>'; };
@@ -245,6 +298,95 @@ async function renderBranches(){
     P.push(`<text x="${cx+16}" y="${y+13}" fill="#6c6c72" font-size="10">${meta}</text>`);
   });
   view.innerHTML = `<svg viewBox="0 0 ${Wsvg} ${H}" style="height:${H}px;max-width:${Wsvg}px">${P.join('')}</svg>`;
+}
+
+// ── Code Graph: functions/classes as nodes, click → dossier inspector ──
+const CODE_COL = {class:'#c9a9f0', function:'#7fe0a8', method:'#8fc7f0', file:'#6b7280'};
+async function renderCode(){
+  if(!window.d3){ view.innerHTML='<span class="hint">code graph needs d3 (offline/blocked CDN).</span>'; return; }
+  let g; try{ g = await api('/api/codegraph'); }
+  catch(e){ view.innerHTML='<span class="hint">code graph API failed: '+esc(e.message)+'</span>'; return; }
+  const syms = g.nodes.filter(n=>n.kind!=='file');           // symbols carry the signal
+  hdr.textContent = syms.length+' symbols · '+g.edges.length+' edges · click a node for its dossier';
+  if(!syms.length){ view.innerHTML='<span class="hint">no code graph yet — run <code>omni-memory map</code> (or just wait; it auto-builds).</span>'; return; }
+  view.innerHTML = '<svg id="cg"></svg>';
+  const ids = new Set(g.nodes.map(n=>n.id));
+  const nodes = g.nodes.map(d=>({...d}));
+  const links = g.edges.filter(e=>ids.has(e.src)&&ids.has(e.dst))
+                       .map(e=>({source:e.src,target:e.dst,rel:e.rel}));
+  const svg = d3.select('#cg'), gg = svg.append('g');
+  const W = svg.node().clientWidth||window.innerWidth, H = svg.node().clientHeight||window.innerHeight;
+  svg.call(d3.zoom().scaleExtent([.08,4]).on('zoom',e=>gg.attr('transform',e.transform)));
+  const deg={}; links.forEach(l=>{deg[l.source]=(deg[l.source]||0)+1;deg[l.target]=(deg[l.target]||0)+1;});
+  const rOf = d => d.kind==='file'?4 : d.kind==='class'?9 : 5+Math.min(8,(deg[d.id]||0));
+  const short = s => {s=(''+s).split('::').pop(); return s.length>24?s.slice(0,23)+'…':s;};
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d=>d.id).distance(l=>l.rel==='contains'?42:120).strength(.3))
+    .force('charge', d3.forceManyBody().strength(-560).distanceMax(1000))
+    .force('collide', d3.forceCollide().radius(d=>rOf(d)+38).iterations(2))
+    .force('x', d3.forceX(W/2).strength(.04)).force('y', d3.forceY(H/2).strength(.04));
+  const linkStroke = {contains:'#26262c', calls:'#33454f', inherits:'#3a2f4a'};
+  const link = gg.append('g').selectAll('line').data(links).join('line')
+    .attr('stroke',d=>linkStroke[d.rel]||'#2b2b31').attr('stroke-width',d=>d.rel==='calls'?1.3:.9)
+    .attr('stroke-dasharray',d=>d.rel==='inherits'?'3 3':null);
+  const node = gg.append('g').selectAll('g').data(nodes).join('g').style('cursor','pointer')
+    .call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
+      .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
+  node.append('circle').attr('r',rOf).attr('fill',d=>CODE_COL[d.kind]||'#888')
+    .attr('stroke','#0b0b0c').attr('stroke-width',1.5);
+  node.append('title').text(d=>(d.signature?d.name+d.signature:d.name)+'  ·  '+d.file);
+  node.append('text').attr('x',d=>rOf(d)+5).attr('y',3).text(d=>short(d.name))
+    .attr('fill','#83848a').style('pointer-events','none');
+  let selected=null;
+  node.on('click',(e,d)=>{ selected=d.id; openInspector(d.id);
+    node.select('circle').attr('stroke',n=>n.id===d.id?'#f0f0f2':'#0b0b0c').attr('stroke-width',n=>n.id===d.id?2.5:1.5); });
+  sim.on('tick',()=>{ link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+      .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    node.attr('transform',d=>`translate(${d.x},${d.y})`); });
+  sim.on('end',()=>{ const xs=nodes.map(n=>n.x),ys=nodes.map(n=>n.y);
+    const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+    const gw=(x1-x0)||1,gh=(y1-y0)||1,pad=260, k=Math.min(3,Math.max(.1,Math.min((W-pad)/gw,(H-pad)/gh)));
+    svg.transition().duration(500).call(d3.zoom().on('zoom',ev=>gg.attr('transform',ev.transform)).transform,
+      d3.zoomIdentity.translate(W/2-k*(x0+x1)/2,H/2-k*(y0+y1)/2).scale(k)); });
+}
+
+// ── Inspector: the readable node dossier ──
+const insp = document.getElementById('insp');
+function closeInspector(){ insp.classList.remove('open'); insp.innerHTML=''; }
+function kbadge(kind){ return `<span class="badge k-${esc(kind)}">${esc(kind)}</span>`; }
+function refRow(c){ return `<div class="ref" data-goto="${esc(c.id)}">${kbadge(c.kind)}
+   <span>${esc(c.name)}${c.signature?esc(c.signature):''}</span>
+   <span class="mono">${esc((c.file||'').split('/').pop())}${c.line_start?':'+c.line_start:''}</span></div>`; }
+async function openInspector(id){
+  insp.classList.add('open');
+  insp.innerHTML = '<div class="ibody"><span class="hint">loading…</span></div>';
+  let d; try{ d = await api('/api/symbol?id='+encodeURIComponent(id)); }
+  catch(e){ insp.innerHTML='<div class="ibody"><span class="hint">'+esc(e.message)+'</span></div>'; return; }
+  const sect = (label, items, render, emptyTxt) => items && items.length
+    ? `<div class="sec">${label}</div>${items.map(render).join('')}`
+    : `<div class="sec">${label}</div><div class="empty">${emptyTxt}</div>`;
+  const pills = (label, arr, cls) => arr && arr.length
+    ? `<div class="sec">${label}</div><div>${arr.map(x=>`<span class="pill ${cls}">${esc(x)}</span>`).join('')}</div>` : '';
+  insp.innerHTML = `
+    <div class="ihead">
+      <button class="iclose" title="close">×</button>
+      ${kbadge(d.kind)}
+      <div class="iname">${esc(d.name)}</div>
+      <div class="ipath">${esc(d.file)}${d.line_start?':'+d.line_start:''}${d.line_end&&d.line_end!==d.line_start?'-'+d.line_end:''}</div>
+    </div>
+    <div class="ibody">
+      ${d.signature?`<div class="sig">${esc(d.name)}${esc(d.signature)}</div>`:''}
+      ${d.doc?`<div class="doc">${esc(d.doc)}</div>`:''}
+      ${pills('Raises', d.raises, 'pill-raise')}
+      ${pills('Emits / publishes', d.emits, 'pill-emit')}
+      ${sect('Calls downstream →', d.calls_out, refRow, 'nothing resolved in-repo')}
+      ${sect('Called by ←', d.called_by, refRow, 'no in-repo callers')}
+      ${d.inherits&&d.inherits.length?sect('Inherits', d.inherits, refRow, ''):''}
+      ${d.contains&&d.contains.length?sect('Contains', d.contains, refRow, ''):''}
+      ${d.calls&&d.calls.length?`<div class="sec">All calls (incl. external)</div><div>${d.calls.map(x=>`<span class="pill pill-call">${esc(x)}</span>`).join('')}</div>`:''}
+    </div>`;
+  insp.querySelector('.iclose').onclick = closeInspector;
+  insp.querySelectorAll('[data-goto]').forEach(el=>el.onclick=()=>openInspector(el.dataset.goto));
 }
 
 // ── auto-refresh: the server rebuilds on git/file changes; we poll a tiny

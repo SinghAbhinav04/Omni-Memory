@@ -104,6 +104,15 @@ def _handler(root: Path):
             if u.path == "/api/codegraph":
                 nodes, edges = store.code_graph()
                 return self._send(200, json.dumps({"nodes": nodes, "edges": edges}))
+            if u.path == "/api/symbol":
+                sid = q.get("id", [""])[0]
+                dossier = store.symbol_dossier(sid)
+                if dossier is None:
+                    return self._send(404, json.dumps({"error": "unknown symbol"}))
+                from .graph import extract
+                dossier["emits"] = [c for c in dossier.get("calls", [])
+                                    if extract.is_emit(c)]
+                return self._send(200, json.dumps(dossier))
             if u.path == "/api/docs":
                 docs = [{"name": n, "exists": (store.dir / n).exists()}
                         for n in ("MEMORY.md", "api-map.md", "linkup.md")]

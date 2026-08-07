@@ -47,6 +47,16 @@ def _assemble(fx: dict) -> tuple[list[dict], list[dict]]:
             seen.add(key)
             edges.append({"src": src, "dst": dst, "rel": rel})
 
+    # attach the raw callee names per symbol (incl. external/unresolved ones,
+    # e.g. kafka.publish) so the dossier can show real downstream + emits.
+    raw_calls: dict[str, list[str]] = {}
+    for c in fx["calls"]:
+        lst = raw_calls.setdefault(c["src"], [])
+        if c["name"] not in lst:
+            lst.append(c["name"])
+    for s in nodes:
+        s["calls"] = raw_calls.get(s["id"], [])
+
     for s in nodes:
         if s.get("parent"):
             add(s["parent"], s["id"], "contains")
