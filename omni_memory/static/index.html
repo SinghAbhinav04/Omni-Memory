@@ -79,6 +79,13 @@
   .pill-call{background:#14202a;color:#9cc9e0;border:1px solid #1c2f3a}
   .empty{color:#55555c;font-size:12px;font-style:italic}
   nav a#flushbtn{color:#a86b6b;margin-top:8px}nav a#flushbtn:hover{color:#e08a8a}
+  #gsearch{width:calc(100% - 24px);margin:0 12px 12px;background:#101012;border:1px solid #23232a;
+    color:#e6e6e8;border-radius:8px;padding:7px 10px;font:11px/1.4 inherit}
+  #gsearch:focus{outline:none;border-color:#2a5a48}
+  .sres{border:1px solid #1c1c1f;border-radius:9px;padding:9px 12px;margin-bottom:7px;background:#0e0e10;cursor:pointer}
+  .sres:hover{background:#141418;border-color:#2f2f36}
+  .sres .sr-h{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+  .sres .sr-mono{color:#8a8a90;font-size:10px;margin-left:auto}
   .stat{display:flex;gap:18px;margin-bottom:14px;flex-wrap:wrap}
   .stat .s{background:#0e0e10;border:1px solid #1c1c1f;border-radius:9px;padding:8px 14px;min-width:78px}
   .stat .s b{display:block;font-size:19px;color:#f0f0f2}.stat .s span{font-size:10px;color:#6c6c72;text-transform:uppercase;letter-spacing:.06em}
@@ -98,6 +105,7 @@
 <div id="app">
   <nav>
     <h1>◇ OmniMemory</h1>
+    <input id="gsearch" placeholder="Search everything…" autocomplete="off">
     <a data-tab="memory" class="on">Memory</a>
     <a data-tab="docs">Docs</a>
     <a data-tab="graph">Memory Graph</a>
@@ -125,9 +133,39 @@ function esc(s){ return (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 
 let activeTab = 'memory';
 document.querySelectorAll('nav a[data-tab]').forEach(a=>a.onclick=()=>{
+  const gs=document.getElementById('gsearch'); if(gs) gs.value='';
   document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on'));
   a.classList.add('on'); activeTab = a.dataset.tab; render(activeTab);
 });
+
+// ── global search: memories + code symbols, click-through to the inspector ──
+let searchTimer=null;
+const gsearch = document.getElementById('gsearch');
+gsearch.oninput = ()=>{ clearTimeout(searchTimer); const q=gsearch.value.trim();
+  searchTimer=setTimeout(()=>{ if(q) renderSearch(q); else render(activeTab); }, 180); };
+async function renderSearch(q){
+  hdr.textContent = 'search: '+q;
+  document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on'));
+  let r; try{ r = await api('/api/search?q='+encodeURIComponent(q)); }
+  catch(e){ view.innerHTML='<span class="hint">search failed: '+esc(e.message)+'</span>'; return; }
+  const mm=r.memories||[], ss=r.symbols||[];
+  if(!mm.length && !ss.length){ view.innerHTML='<span class="hint">no matches for “'+esc(q)+'”.</span>'; return; }
+  const memHtml = mm.map(m=>`<div class="sres" data-mem="${esc(m.id)}">
+      <div class="sr-h">${m.kind?`<span class="badge k-${esc(m.kind)}">${esc(m.kind)}</span>`:''}
+        <span class="sr-mono">memory · [${esc(m.id)}]</span></div>
+      <div style="color:#dcdce0">${esc(m.text)}</div></div>`).join('');
+  const symHtml = ss.map(s=>`<div class="sres" data-sym="${esc(s.id)}">
+      <div class="sr-h"><span class="badge k-${esc(s.kind)}">${esc(s.kind)}</span>
+        <span style="color:#eaeaea">${esc(s.name)}${s.signature?esc(s.signature):''}</span>
+        <span class="sr-mono">${esc((s.file||'').split('/').pop())}${s.line_start?':'+s.line_start:''}</span></div>
+      ${s.doc?`<div style="color:#9a9aa0;font-size:11.5px">${esc(s.doc)}</div>`:''}</div>`).join('');
+  view.innerHTML =
+    (mm.length?`<div class="sec" style="color:#7c7c82;margin:2px 0 8px">Memories (${mm.length})</div>${memHtml}`:'')+
+    (ss.length?`<div class="sec" style="color:#7c7c82;margin:16px 0 8px">Code symbols (${ss.length})</div>${symHtml}`:'');
+  const byId={}; mm.forEach(m=>byId[m.id]=m);
+  view.querySelectorAll('[data-mem]').forEach(el=>el.onclick=()=>openMemoryInspector(byId[el.dataset.mem]));
+  view.querySelectorAll('[data-sym]').forEach(el=>el.onclick=()=>openInspector(el.dataset.sym));
+}
 
 document.getElementById('flushbtn').onclick = async ()=>{
   const scope = prompt('Flush what? Type: all · memory · graph\n(This wipes stored data so it can be rebuilt — cannot be undone.)', 'all');

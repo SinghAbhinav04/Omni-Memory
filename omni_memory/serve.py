@@ -145,6 +145,9 @@ def _handler(root: Path):
                     "root": str(root.resolve()),
                     "default_branch": store.get_meta("default_branch", "main"),
                     "version": __version__}))
+            if u.path == "/api/search":
+                return self._send(200, json.dumps(
+                    store.search(q.get("q", [""])[0])))
             if u.path == "/api/commits":
                 return self._send(200, json.dumps(store.commits()))
             if u.path == "/api/codegraph":

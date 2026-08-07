@@ -276,6 +276,23 @@ class Store:
         r = self.db.execute("SELECT * FROM memory WHERE id=?", (mem_id,)).fetchone()
         return self._row_to_mem(r) if r else None
 
+    def search(self, query: str, limit: int = 25) -> dict:
+        """One free-text search across memories and code symbols, for the
+        dashboard's global search. Returns {'memories': [...], 'symbols': [...]}."""
+        q = (query or "").strip()
+        if not q:
+            return {"memories": [], "symbols": []}
+        like = f"%{q}%"
+        mems = [self._row_to_mem(r) for r in self.db.execute(
+            "SELECT * FROM memory WHERE status='active' AND text LIKE ? "
+            "ORDER BY updated DESC LIMIT ?", (like, limit)).fetchall()]
+        syms = [dict(r) for r in self.db.execute(
+            "SELECT id,name,kind,file,line_start,signature,doc FROM code_nodes "
+            "WHERE kind!='file' AND (name LIKE ? OR signature LIKE ? OR doc LIKE ?) "
+            "ORDER BY (name LIKE ?) DESC, name LIMIT ?",
+            (like, like, like, like, limit)).fetchall()]
+        return {"memories": mems, "symbols": syms}
+
     def update_memory(self, mem_id: str, text: Optional[str] = None,
                       kind: Optional[str] = None,
                       files: Optional[list] = None) -> bool:
