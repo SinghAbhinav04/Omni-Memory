@@ -91,6 +91,12 @@ def _handler(root: Path):
                     ok = store.forget(b.get("id", ""))
                     _sync_docs(store, root)
                     return self._send(200 if ok else 404, json.dumps({"ok": ok}))
+                if u.path == "/api/memory/reanchor":
+                    b = self._body()
+                    head = gitmeta._git(root, "rev-parse", "HEAD")[:12]
+                    ok = store.reanchor_memory(b.get("id", ""), commit_range=head)
+                    _sync_docs(store, root)
+                    return self._send(200 if ok else 404, json.dumps({"ok": ok}))
                 if u.path == "/api/doc/save":
                     b = self._body()
                     name = b.get("name", "")

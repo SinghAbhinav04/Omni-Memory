@@ -224,6 +224,17 @@ class Store:
         self.db.execute("UPDATE branches SET status=? WHERE name=?", (status, name))
         self.db.commit()
 
+    def reanchor_memory(self, mem_id: str, commit_range: str = "") -> bool:
+        """Mark a stale memory re-verified against the current code: clear the
+        stale flag and re-anchor it to the current commit so staleness is
+        measured from here on."""
+        cur = self.db.execute(
+            "UPDATE memory SET stale=0, stale_since=NULL, stale_files=NULL, "
+            "commit_range=?, updated=? WHERE id=?",
+            (commit_range, time.time(), mem_id))
+        self.db.commit()
+        return cur.rowcount > 0
+
     def reanchor_branch(self, frm: str, to: str) -> int:
         """Re-tag a merged branch's active memories onto the base branch."""
         cur = self.db.execute(

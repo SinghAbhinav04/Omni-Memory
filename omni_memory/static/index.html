@@ -100,6 +100,8 @@
   .irow{display:flex;gap:8px;margin-top:6px}
   .doc-edit{width:100%;min-height:60vh;background:#0a0a0c;border:1px solid #23232a;color:#dcdce0;
     border-radius:8px;padding:12px;font:12px/1.6 ui-monospace,monospace;resize:vertical}
+  .stale-banner{background:#2a1e10;border:1px solid #4a3418;color:#e6c78a;border-radius:8px;
+    padding:10px 12px;margin-bottom:14px;font-size:12px;line-height:1.5}
 </style></head>
 <body>
 <div id="app">
@@ -464,6 +466,8 @@ function openMemoryInspector(mem){
       <div class="ipath">${isNew?'added via dashboard':esc(mem.branch)+' · ['+esc(mem.id)+']'}</div>
     </div>
     <div class="ibody">
+      ${mem.stale?`<div class="stale-banner">⚠ This memory is <b>STALE</b> — code it was anchored to changed. Re-verify it's still true, then re-anchor.
+        <button class="btn" id="mreanchor" style="margin-top:8px">Mark re-verified (re-anchor)</button></div>`:''}
       <div class="sec">Kind</div>
       <select id="mkind">${KINDS.map(k=>`<option ${k===mem.kind?'selected':''}>${k}</option>`).join('')}</select>
       <div class="sec">Text</div>
@@ -494,6 +498,11 @@ function openMemoryInspector(mem){
   if(!isNew) $('#mdel').onclick = async ()=>{
     if(!confirm('Delete (archive) this memory?')) return;
     try{ await post('/api/memory/delete', {id:mem.id}); closeInspector();
+      if(activeTab==='memory') render('memory'); }
+    catch(e){ $('#mmsg').textContent='Failed: '+e.message; }
+  };
+  const ra=$('#mreanchor'); if(ra) ra.onclick = async ()=>{
+    try{ await post('/api/memory/reanchor', {id:mem.id}); closeInspector();
       if(activeTab==='memory') render('memory'); }
     catch(e){ $('#mmsg').textContent='Failed: '+e.message; }
   };
