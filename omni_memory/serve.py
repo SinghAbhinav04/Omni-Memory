@@ -162,6 +162,8 @@ def _handler(root: Path):
             if u.path == "/api/duplicates":
                 return self._send(200, json.dumps(
                     {"groups": store.duplicate_groups()}))
+            if u.path == "/api/overview":
+                return self._send(200, json.dumps(store.overview()))
             if u.path == "/api/commits":
                 return self._send(200, json.dumps(store.commits()))
             if u.path == "/api/codegraph":

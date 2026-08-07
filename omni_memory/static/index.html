@@ -108,7 +108,8 @@
   <nav>
     <h1>◇ OmniMemory</h1>
     <input id="gsearch" placeholder="Search everything…" autocomplete="off">
-    <a data-tab="memory" class="on">Memory</a>
+    <a data-tab="overview" class="on">Overview</a>
+    <a data-tab="memory">Memory</a>
     <a data-tab="docs">Docs</a>
     <a data-tab="graph">Memory Graph</a>
     <a data-tab="code">Code Graph</a>
@@ -133,7 +134,7 @@ async function api(p){
 }
 function esc(s){ return (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
-let activeTab = 'memory';
+let activeTab = 'overview';
 document.querySelectorAll('nav a[data-tab]').forEach(a=>a.onclick=()=>{
   const gs=document.getElementById('gsearch'); if(gs) gs.value='';
   document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on'));
@@ -188,6 +189,7 @@ async function render(tab){
   view.innerHTML = '<span class="hint">loading…</span>';
   try {
     closeInspector();
+    if(tab==='overview') return await renderOverview();
     if(tab==='memory') return await renderMemory();
     if(tab==='docs') return await renderDocs();
     if(tab==='graph') return await renderGraph();
@@ -198,6 +200,32 @@ async function render(tab){
       '<br>(open the browser console for the stack trace)</span>';
     console.error(e);
   }
+}
+
+async function renderOverview(){
+  const o = await api('/api/overview');
+  hdr.textContent = 'project memory health';
+  const m=o.memories, c=o.code, b=o.branches;
+  const tile=(n,label,accent)=>`<div class="s" style="min-width:96px${accent?';border-color:'+accent:''}"><b${accent?' style="color:'+accent+'"':''}>${n}</b><span>${label}</span></div>`;
+  const kinds=Object.entries(o.kinds||{}); const maxk=Math.max(1,...kinds.map(([,n])=>n));
+  view.innerHTML = `
+    <div class="sec" style="color:#7c7c82;margin:2px 0 8px">Memory</div>
+    <div class="stat">${tile(m.active,'active')}${tile(m.stale,'stale',m.stale?'#4a3418':'')}${tile(m.merged,'merged')}${tile(m.superseded,'superseded')}</div>
+    <div class="sec" style="color:#7c7c82;margin:18px 0 8px">Code graph & branches</div>
+    <div class="stat">${tile(c.symbols,'symbols')}${tile(c.edges,'edges')}${tile(c.files,'files')}${tile(b.total,'branches')}</div>
+    ${kinds.length?`<div class="sec" style="color:#7c7c82;margin:18px 0 8px">Memory by kind</div>
+      <div style="max-width:520px">${kinds.map(([k,n])=>`<div style="display:flex;align-items:center;gap:10px;margin:5px 0">
+        <span class="badge k-${esc(k)}" style="width:82px;text-align:center">${esc(k)}</span>
+        <div style="flex:1;background:#141418;border-radius:5px;overflow:hidden"><div style="width:${Math.round(n/maxk*100)}%;background:#2a5a48;height:14px"></div></div>
+        <span class="k" style="width:26px;text-align:right">${n}</span></div>`).join('')}</div>`:''}
+    ${(o.top_cited||[]).length?`<div class="sec" style="color:#7c7c82;margin:18px 0 8px">Most-cited memories</div>
+      ${o.top_cited.map(t=>`<div class="mem" data-mem="${esc(t.id)}" style="cursor:pointer">
+        <div style="display:flex;gap:8px"><span class="badge k-${esc(t.kind)}">${esc(t.kind)}</span>
+        <span class="k" style="margin-left:auto">${t.uses}× cited</span></div>
+        <div class="t">${esc(t.text)}</div></div>`).join('')}`:''}`;
+  if(m.stale) hdr.textContent += `  ·  ⚠ ${m.stale} stale`;
+  const byId={}; (o.top_cited||[]).forEach(t=>byId[t.id]=t);
+  view.querySelectorAll('[data-mem]').forEach(el=>el.onclick=()=>openMemoryInspector(byId[el.dataset.mem]));
 }
 
 let mermaidInit=false;
@@ -608,6 +636,6 @@ function setLive(ok){
     document.querySelector('nav').appendChild(dot); }
   dot.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:${ok?'#4ade80':'#71717a'};display:inline-block"></span>${ok?'live · auto-updating':'reconnecting…'}`;
 }
-(async()=>{ render('memory'); poll(); setInterval(poll, 3000); })();
+(async()=>{ render('overview'); poll(); setInterval(poll, 3000); })();
 </script>
 </body></html>

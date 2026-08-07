@@ -287,6 +287,32 @@ class Store:
         r = self.db.execute("SELECT * FROM memory WHERE id=?", (mem_id,)).fetchone()
         return self._row_to_mem(r) if r else None
 
+    def overview(self) -> dict:
+        """A single aggregate for the dashboard's Overview tab: memory counts by
+        status/kind, code-graph size, branch health, and the most-cited memories."""
+        counts = self.counts()
+        stale = self.db.execute(
+            "SELECT COUNT(*) n FROM memory WHERE status='active' AND stale=1").fetchone()["n"]
+        kinds = {r["kind"]: r["c"] for r in self.db.execute(
+            "SELECT kind, COUNT(*) c FROM memory WHERE status='active' "
+            "GROUP BY kind ORDER BY c DESC")}
+        nodes, edges = self.code_graph()
+        files = sum(1 for n in nodes if n["kind"] == "file")
+        br = {r["status"] or "active": r["c"] for r in self.db.execute(
+            "SELECT status, COUNT(*) c FROM branches GROUP BY status")}
+        top = [dict(r) for r in self.db.execute(
+            "SELECT id, text, kind, uses FROM memory WHERE status='active' AND uses>0 "
+            "ORDER BY uses DESC LIMIT 5")]
+        return {
+            "memories": {"active": counts.get("active", 0), "stale": stale,
+                         "merged": counts.get("merged", 0),
+                         "superseded": counts.get("superseded", 0)},
+            "kinds": kinds,
+            "code": {"symbols": len(nodes) - files, "edges": len(edges), "files": files},
+            "branches": {"total": sum(br.values()), "by_status": br},
+            "top_cited": top,
+        }
+
     def duplicate_groups(self) -> list:
         """Cluster active memories that say near-identical things (same branch,
         token-overlap over threshold) so the dashboard can offer to merge them.
