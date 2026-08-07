@@ -27,6 +27,15 @@ def find_project_root(start: Optional[Path] = None) -> Path:
 def store_dir(root: Optional[Path] = None) -> Path:
     d = find_project_root(root) / STORE_DIRNAME
     d.mkdir(exist_ok=True)
+    # Self-ignore: a `*` .gitignore inside the store makes the whole directory
+    # (the SQLite db + its -wal/-shm sidecars) invisible to git in any project,
+    # so users never see `.omni-memory/` clutter and never commit the live db.
+    gi = d / ".gitignore"
+    if not gi.exists():
+        try:
+            gi.write_text("*\n")
+        except Exception:  # noqa: BLE001
+            pass
     return d
 
 
