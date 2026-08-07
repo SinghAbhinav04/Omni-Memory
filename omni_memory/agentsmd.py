@@ -20,8 +20,10 @@ START = "<!-- OMNI-MEMORY:START — auto-generated; edit outside this block only
 END = "<!-- OMNI-MEMORY:END -->"
 
 # Which memory kinds are worth surfacing inline (highest-signal first) and how
-# many of each to show so the block stays compact.
-_INLINE = [("decision", 6), ("gotcha", 6), ("flow", 4), ("endpoint", 4)]
+# many of each to show. Kept small: AGENTS.md is standing context some IDEs load
+# every session, so inlining a lot here is a recurring token cost — the agent can
+# always pull the rest on demand via `omni-memory inject`/`recall`.
+_INLINE = [("decision", 4), ("gotcha", 3), ("flow", 2), ("endpoint", 2)]
 
 
 def render_block(store: Store, root: Path) -> str:

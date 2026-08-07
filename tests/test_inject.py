@@ -12,7 +12,7 @@ def test_block_has_rules_and_ids(store, repo):
                                 kind="decision", branch="main"))
     block = inject.build_block(store, repo, query="stripe checkout")
     assert "VERIFIED PROJECT MEMORY" in block
-    assert "RULES:" in block
+    assert "not in memory" in block            # enforcement rules present
     assert f"[{m.id}]" in block
 
 
@@ -26,6 +26,23 @@ def test_item_cap_and_budget(store, repo):
     body = [ln for ln in block.splitlines() if ln.startswith("[")]
     assert len(body) <= inject._MAX_ITEMS
     assert len(block) <= inject._CHAR_BUDGET + 400   # + header/rules overhead
+
+
+def test_meta_override_lowers_budget(store, repo):
+    for i in range(40):
+        store.add_memory(Memory(text=f"topic fact {i} " + "detail " * 20,
+                                kind="fact", branch="main"))
+    big = inject.build_block(store, repo, query="topic")
+    store.set_meta("inject_max_items", 3)
+    store.set_meta("inject_char_budget", 500)
+    small = inject.build_block(store, repo, query="topic")
+    assert len(small) < len(big)
+    assert len([ln for ln in small.splitlines() if ln.startswith("[")]) <= 3
+
+
+def test_rules_are_compact(store, repo):
+    # the enforcement rules ride every message → keep them short
+    assert len(inject.ENFORCE_RULES) < 220
 
 
 def test_no_match_widens_to_few(store, repo):

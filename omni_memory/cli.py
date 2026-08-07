@@ -299,6 +299,42 @@ def cmd_flush(args):
     return 0
 
 
+def cmd_usage(args):
+    """`usage [--max-items N] [--budget CHARS]` — show the approximate token
+    footprint of everything OmniMemory injects, and tune the per-prompt cost."""
+    s, root = _store()
+    if args.max_items is not None:
+        s.set_meta("inject_max_items", args.max_items)
+    if args.budget is not None:
+        s.set_meta("inject_char_budget", args.budget)
+    if args.max_items is not None or args.budget is not None:
+        print("[+] updated injection limits.\n")
+
+    def toks(txt):
+        return (len(txt or "") + 3) // 4        # rough ~4 chars/token
+
+    block = inject.build_block(s, root, query="")
+    ag = root / "AGENTS.md"
+    ag_block = ""
+    if ag.exists():
+        from . import agentsmd
+        t = ag.read_text(errors="ignore")
+        ag_block = (t.split(agentsmd.START, 1)[1].split(agentsmd.END, 1)[0]
+                    if agentsmd.START in t and agentsmd.END in t else t)
+    mem_md = s.dir / "MEMORY.md"
+    mi = int(s.get_meta("inject_max_items", inject._MAX_ITEMS))
+    cb = int(s.get_meta("inject_char_budget", inject._CHAR_BUDGET))
+    print("OmniMemory token footprint  (approx · ~4 chars/token)")
+    print(f"  per-prompt injection : ~{toks(block):>4} tok   · rides EVERY message")
+    print(f"  session-start seed   : ~{toks(block):>4} tok   · once per session")
+    print(f"  AGENTS.md standing   : ~{toks(ag_block):>4} tok   · loaded by Antigravity/Cursor each session")
+    if mem_md.exists():
+        print(f"  MEMORY.md (@-ref)    : ~{toks(mem_md.read_text(errors='ignore')):>4} tok   · only if you @-reference it")
+    print(f"\n  settings: max_items={mi}  char_budget={cb}")
+    print("  lower it: omni-memory usage --max-items 6 --budget 1000")
+    return 0
+
+
 def cmd_hook(args):
     """Claude Code hook entrypoint. MUST NEVER raise — a hook that errors would
     disrupt the user's prompt/session — so the whole body is guarded and any
@@ -519,6 +555,9 @@ def main(argv=None):
                     choices=["auto", "claude-code", "antigravity"],
                     help="which IDE to bind (default: auto-detect)")
     sub.add_parser("doctor")
+    ug = sub.add_parser("usage")
+    ug.add_argument("--max-items", type=int, help="max memories injected per prompt")
+    ug.add_argument("--budget", type=int, help="max chars of the injected block")
 
     args = p.parse_args(argv)
     dispatch = {
@@ -530,6 +569,7 @@ def main(argv=None):
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,
         "flush": cmd_flush, "bind": cmd_bind, "doctor": cmd_doctor,
+        "usage": cmd_usage,
     }
     return dispatch[args.cmd](args)
 

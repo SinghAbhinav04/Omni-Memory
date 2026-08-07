@@ -25,22 +25,21 @@ def _files_in_play(root: Path, query: str, files: Optional[list[str]]) -> list[s
     fip.update(ln.strip() for ln in changed.splitlines() if ln.strip())
     return [f for f in fip if f]
 
+# Compressed to ~1/3 the length: it's injected on EVERY message, so every word
+# is a recurring token cost. Same four directives, terse.
 ENFORCE_RULES = (
-    "RULES: (1) Treat the memory below as verified project truth — prefer it over "
-    "assumptions. (2) When you rely on a memory, cite its [id]. (3) If the answer "
-    "is NOT covered by memory or the code, say \"not in memory\" — do NOT invent "
-    "architecture, endpoints, params, or flows. (4) Items marked ⚠STALE reference "
-    "code that changed since they were written — re-verify against the code before "
-    "relying on them."
+    "Rules: treat these as verified project truth; cite the [id]s you use; if it's "
+    "not here or in the code say \"not in memory\" (don't invent it); re-verify ⚠STALE items."
 )
 
 
 # Keep the per-prompt injection cheap: it rides on EVERY message, so it must be
-# a tight, high-signal budget rather than a memory dump.
-_MAX_ITEMS = 10          # hard cap on injected memories
-_WIDEN_ITEMS = 5         # when nothing matched, only a few top memories
-_TEXT_CAP = 180          # truncate long memory text
-_CHAR_BUDGET = 1800      # ~450 tokens for the whole block
+# a tight, high-signal budget rather than a memory dump. Defaults are overridable
+# per-project via meta keys so users can trade recall for tokens.
+_MAX_ITEMS = 8           # hard cap on injected memories (was 10)
+_WIDEN_ITEMS = 4         # when nothing matched, only a few top memories
+_TEXT_CAP = 160          # truncate long memory text
+_CHAR_BUDGET = 1400      # ~350 tokens for the whole block (was 1800)
 
 
 def build_block(store: Store, root: Path, query: str = "",
@@ -51,6 +50,10 @@ def build_block(store: Store, root: Path, query: str = "",
     and the files in play, then emits a *budget-capped* set with enforcement
     rules. Returns "" when there's nothing worth injecting. Kept deliberately
     lean because it rides on every message (see the _MAX_* / _CHAR_BUDGET caps)."""
+    # per-project overrides (set via `omni-memory usage --max-items/--budget`)
+    limit = int(store.get_meta("inject_max_items", limit))
+    char_budget = int(store.get_meta("inject_char_budget", _CHAR_BUDGET))
+    widen = int(store.get_meta("inject_widen_items", _WIDEN_ITEMS))
     cur, base = branchmod.scope(store, root)
     branch = None if cur == "*" else cur
     fip = _files_in_play(root, query, files)
@@ -61,7 +64,7 @@ def build_block(store: Store, root: Path, query: str = "",
     widened = False
     if not mems and query:  # nothing matched: inject only a FEW top memories,
         widened = True      # not a full 20-item dump on an unrelated prompt
-        mems = store.memories(branch=branch, base=base, limit=_WIDEN_ITEMS)
+        mems = store.memories(branch=branch, base=base, limit=widen)
     if not mems:
         return ""
     scope_label = "all branches" if cur == "*" else (
@@ -72,7 +75,7 @@ def build_block(store: Store, root: Path, query: str = "",
         ENFORCE_RULES,
         "",
     ]
-    used, budget = 0, _CHAR_BUDGET
+    used, budget = 0, char_budget
     for m in mems:
         tag = f"[{m['id']}]"
         where = (" · " + ", ".join(m["files"][:2])) if m["files"] else ""
