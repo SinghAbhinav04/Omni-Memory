@@ -11,6 +11,9 @@ from .store import Store
 
 
 def build_graph(store: Store, root: Path) -> dict:
+    """Assemble the *knowledge* graph for the dashboard's Memory Graph tab:
+    memories, the files they touch, and branches, linked into {nodes, edges}.
+    (Distinct from the *code* graph in `graph/build.py`.)"""
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
 

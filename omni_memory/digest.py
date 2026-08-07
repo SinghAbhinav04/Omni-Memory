@@ -25,6 +25,9 @@ _HEADINGS = {
 
 
 def write_digest(store: Store) -> Path:
+    """Render all active memories into `.omni-memory/MEMORY.md`, grouped by branch
+    then by kind (decisions first, todos last). This is the human/agent-readable
+    knowledge base; it's regenerated on every capture/edit so it never drifts."""
     mems = store.memories(status="active", limit=2000)
     by_branch: dict[str, dict[str, list[dict]]] = {}
     for m in mems:

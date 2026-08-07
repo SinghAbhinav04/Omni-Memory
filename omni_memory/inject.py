@@ -45,6 +45,12 @@ _CHAR_BUDGET = 1800      # ~450 tokens for the whole block
 
 def build_block(store: Store, root: Path, query: str = "",
                 files: Optional[list[str]] = None, limit: int = _MAX_ITEMS) -> str:
+    """Build the `VERIFIED PROJECT MEMORY` block injected into a prompt.
+
+    Scopes to the current branch+base, ranks memories by relevance to the query
+    and the files in play, then emits a *budget-capped* set with enforcement
+    rules. Returns "" when there's nothing worth injecting. Kept deliberately
+    lean because it rides on every message (see the _MAX_* / _CHAR_BUDGET caps)."""
     cur, base = branchmod.scope(store, root)
     branch = None if cur == "*" else cur
     fip = _files_in_play(root, query, files)

@@ -11,11 +11,13 @@ from .store import Store, find_project_root
 
 
 def _store():
+    """Open the store for the project the CWD lives in. Every command starts here."""
     root = find_project_root()
     return Store(root), root
 
 
 def cmd_status(args):
+    """`status` — layer state, current branch, memory counts, AI provider, store path."""
     s, root = _store()
     branchmod.sync_git(s, root)
     c = s.counts()
@@ -36,6 +38,7 @@ def cmd_status(args):
 
 
 def cmd_toggle(args):
+    """`on` / `off` — enable or disable the whole memory layer (injection + capture)."""
     s, _ = _store()
     s.set_meta("enabled", args.cmd == "on")
     print(f"OmniMemory {'enabled' if args.cmd == 'on' else 'disabled'}.")
@@ -43,6 +46,7 @@ def cmd_toggle(args):
 
 
 def cmd_branch_aware(args):
+    """`branch-aware` — toggle scoping memory to the current branch+base vs. all branches."""
     s, _ = _store()
     new = not s.get_meta("branch_aware", True)
     s.set_meta("branch_aware", new)
@@ -51,6 +55,7 @@ def cmd_branch_aware(args):
 
 
 def cmd_remember(args):
+    """`remember <text> [--kind]` — add one memory by hand and refresh the digest."""
     s, root = _store()
     m = sm.remember(s, root, " ".join(args.text), kind=args.kind, source="manual")
     digest.write_digest(s)
@@ -69,6 +74,7 @@ def cmd_capture(args):
 
 
 def cmd_digest(args):
+    """`digest` — (re)render the store into `.omni-memory/MEMORY.md`."""
     s, _ = _store()
     out = digest.write_digest(s)
     print(f"[+] knowledge base → {out}")
@@ -115,6 +121,8 @@ def cmd_build(args):
 
 
 def cmd_prompt(args):
+    """`prompt build|session` — print the extraction instructions for the agent to
+    follow, whose JSON output is then piped back into `capture`."""
     print(sm.BUILD_PROMPT if args.which == "build" else sm.EXTRACTION_PROMPT)
     return 0
 
@@ -140,6 +148,8 @@ def cmd_artifact(args):
 
 
 def cmd_inject(args):
+    """`inject <query>` — print the VERIFIED PROJECT MEMORY block for a request
+    (what the agent should treat as ground truth at the start of a task)."""
     s, root = _store()
     if not s.get_meta("enabled", True):
         return 0
@@ -151,6 +161,7 @@ def cmd_inject(args):
 
 
 def cmd_recall(args):
+    """`recall <query>` — search memory and print matches (query instead of grep)."""
     s, root = _store()
     cur, base = branchmod.scope(s, root)
     mems = s.memories(branch=None if cur == "*" else cur, base=base,

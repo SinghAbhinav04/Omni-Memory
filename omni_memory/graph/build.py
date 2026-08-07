@@ -18,6 +18,9 @@ from . import extract
 
 
 def build_code_graph(store: Store, root: Path) -> dict:
+    """Extract the repo's symbols, resolve their calls/bases to concrete symbol
+    ids, and persist the directed code graph. Returns a summary (backend, files
+    parsed, node/edge/kind counts) for the CLI."""
     fx = extract.extract_repo(root)
     nodes, edges = _assemble(fx)
     store.replace_code_graph(nodes, edges)
