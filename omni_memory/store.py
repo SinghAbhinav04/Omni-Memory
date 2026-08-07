@@ -287,6 +287,49 @@ class Store:
         r = self.db.execute("SELECT * FROM memory WHERE id=?", (mem_id,)).fetchone()
         return self._row_to_mem(r) if r else None
 
+    def duplicate_groups(self) -> list:
+        """Cluster active memories that say near-identical things (same branch,
+        token-overlap over threshold) so the dashboard can offer to merge them.
+        Returns a list of groups, each a list of memory dicts (newest first)."""
+        rows = [self._row_to_mem(r) for r in self.db.execute(
+            "SELECT * FROM memory WHERE status='active' ORDER BY updated DESC")]
+        groups, used = [], set()
+        for i, a in enumerate(rows):
+            if a["id"] in used:
+                continue
+            na = _norm(a["text"])
+            group = [a]
+            for b in rows[i + 1:]:
+                if b["id"] in used or b["branch"] != a["branch"]:
+                    continue
+                if _similar(na, _norm(b["text"])):
+                    group.append(b)
+                    used.add(b["id"])
+            if len(group) > 1:
+                used.add(a["id"])
+                groups.append(group)
+        return groups
+
+    def merge_memories(self, keep_id: str, drop_ids: list) -> int:
+        """Merge duplicates: fold the dropped memories' files into the kept one,
+        then archive the drops. Returns how many were archived."""
+        keep = self.get_memory(keep_id)
+        if not keep:
+            return 0
+        files = list(keep.get("files") or [])
+        for did in drop_ids:
+            d = self.get_memory(did)
+            if d:
+                for f in (d.get("files") or []):
+                    if f not in files:
+                        files.append(f)
+        self.update_memory(keep_id, files=files)
+        n = 0
+        for did in drop_ids:
+            if did != keep_id and self.forget(did):
+                n += 1
+        return n
+
     def search(self, query: str, limit: int = 25) -> dict:
         """One free-text search across memories and code symbols, for the
         dashboard's global search. Returns {'memories': [...], 'symbols': [...]}."""

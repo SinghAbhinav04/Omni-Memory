@@ -250,7 +250,8 @@ async function renderMemory(){
     `<div class="stat">${top.map(([k,n])=>`<div class="s"><b>${n}</b><span>${esc(k)}</span></div>`).join('')||''}</div>`+
     '<div style="display:flex;gap:10px;margin-bottom:14px">'+
       '<input class="search" style="margin:0" placeholder="search memory…">'+
-      '<button class="btn" id="addmem">+ Add memory</button></div>'+
+      '<button class="btn" id="addmem">+ Add memory</button>'+
+      '<button class="btn sec" id="dupbtn" style="display:none">Review duplicates</button></div>'+
     '<div id="list"></div>';
   const list = document.getElementById('list');
   const byId = {}; mems.forEach(m=>byId[m.id]=m);
@@ -267,6 +268,33 @@ async function renderMemory(){
   draw('');
   view.querySelector('.search').oninput = e => draw(e.target.value.toLowerCase());
   document.getElementById('addmem').onclick = ()=>openMemoryInspector(null);
+  // surface near-duplicate clusters, offer one-click merge
+  api('/api/duplicates').then(d=>{
+    const groups=d.groups||[]; const btn=document.getElementById('dupbtn'); if(!btn) return;
+    if(!groups.length) return;
+    btn.style.display=''; btn.textContent=`Review duplicates (${groups.length})`;
+    btn.onclick=()=>renderDuplicates(groups);
+  }).catch(()=>{});
+}
+
+function renderDuplicates(groups){
+  hdr.textContent = groups.length+' duplicate cluster(s) — pick the one to keep';
+  view.innerHTML = '<button class="btn sec" id="backmem" style="margin-bottom:14px">← back to memory</button>'+
+    groups.map((g,gi)=>`<div class="mem" style="border-color:#3a3418">
+      <div class="k" style="margin-bottom:8px">cluster ${gi+1} · ${g.length} similar · branch ${esc(g[0].branch)}</div>
+      ${g.map(m=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-top:1px solid #17171a">
+        <button class="btn" data-keep="${esc(m.id)}" data-gi="${gi}" style="padding:4px 10px;font-size:11px">Keep this</button>
+        <div><span class="badge k-${esc(m.kind)}">${esc(m.kind)}</span>
+          <span class="k">[${esc(m.id)}]</span><div class="t" style="margin-top:3px">${esc(m.text)}</div></div>
+      </div>`).join('')}</div>`).join('');
+  document.getElementById('backmem').onclick=()=>render('memory');
+  view.querySelectorAll('[data-keep]').forEach(el=>el.onclick=async()=>{
+    const gi=+el.dataset.gi, keep=el.dataset.keep;
+    const drop=groups[gi].map(m=>m.id).filter(id=>id!==keep);
+    if(!confirm(`Keep [${keep}] and archive ${drop.length} duplicate(s)?`)) return;
+    try{ await post('/api/memory/merge', {keep, drop}); render('memory'); }
+    catch(e){ alert('Merge failed: '+e.message); }
+  });
 }
 
 async function renderGraph(){

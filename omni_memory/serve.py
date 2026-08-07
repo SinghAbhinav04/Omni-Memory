@@ -97,6 +97,11 @@ def _handler(root: Path):
                     ok = store.reanchor_memory(b.get("id", ""), commit_range=head)
                     _sync_docs(store, root)
                     return self._send(200 if ok else 404, json.dumps({"ok": ok}))
+                if u.path == "/api/memory/merge":
+                    b = self._body()
+                    n = store.merge_memories(b.get("keep", ""), b.get("drop", []))
+                    _sync_docs(store, root)
+                    return self._send(200, json.dumps({"ok": True, "archived": n}))
                 if u.path == "/api/doc/save":
                     b = self._body()
                     name = b.get("name", "")
@@ -154,6 +159,9 @@ def _handler(root: Path):
             if u.path == "/api/search":
                 return self._send(200, json.dumps(
                     store.search(q.get("q", [""])[0])))
+            if u.path == "/api/duplicates":
+                return self._send(200, json.dumps(
+                    {"groups": store.duplicate_groups()}))
             if u.path == "/api/commits":
                 return self._send(200, json.dumps(store.commits()))
             if u.path == "/api/codegraph":
