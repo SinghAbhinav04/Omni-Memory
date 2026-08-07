@@ -247,7 +247,7 @@ async function renderMemory(){
   const counts = {}; mems.forEach(m=>counts[m.kind]=(counts[m.kind]||0)+1);
   const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5);
   view.innerHTML =
-    `<div class="stat">${top.map(([k,n])=>`<div class="s"><b>${n}</b><span>${esc(k)}</span></div>`).join('')||''}</div>`+
+    `<div class="stat">${top.map(([k,n])=>`<div class="s" data-kind="${esc(k)}" style="cursor:pointer" title="filter by ${esc(k)}"><b>${n}</b><span>${esc(k)}</span></div>`).join('')||''}</div>`+
     '<div style="display:flex;gap:10px;margin-bottom:14px">'+
       '<input class="search" style="margin:0" placeholder="search memory…">'+
       '<button class="btn" id="addmem">+ Add memory</button>'+
@@ -255,19 +255,28 @@ async function renderMemory(){
     '<div id="list"></div>';
   const list = document.getElementById('list');
   const byId = {}; mems.forEach(m=>byId[m.id]=m);
-  const draw = f => { list.innerHTML = mems.filter(m=>!f||m.text.toLowerCase().includes(f))
-    .map(m=>`<div class="mem" data-mem="${esc(m.id)}" style="cursor:pointer">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+  let kindFilter = null;
+  const fileChip = x => fileLink(x) ? `<span class="chip" style="cursor:pointer">${fileLink(x)}</span>` : `<span class="chip">${esc(x)}</span>`;
+  const draw = f => { list.innerHTML = mems
+    .filter(m=>!kindFilter||m.kind===kindFilter)
+    .filter(m=>!f||m.text.toLowerCase().includes(f))
+    .map(m=>`<div class="mem" style="cursor:pointer">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px" data-mem="${esc(m.id)}">
         ${m.kind?`<span class="badge k-${esc(m.kind)}">${esc(m.kind)}</span>`:''}
         <span class="k" style="letter-spacing:.04em">${esc(m.branch)}${m.stale?' · ⚠STALE':''}</span>
         <span class="k" style="margin-left:auto">[${m.id}] ✎</span></div>
-      <div class="t">${esc(m.text)}</div>
-      ${(m.files||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join('')}</div>`).join('')
-      || '<span class="hint">no memories yet — click “+ Add memory”, work in a session, or run: omni-memory remember "…"</span>';
+      <div class="t" data-mem="${esc(m.id)}">${esc(m.text)}</div>
+      ${(m.files||[]).map(fileChip).join('')}</div>`).join('')
+      || '<span class="hint">no memories'+(kindFilter?' of kind '+esc(kindFilter):'')+' — click “+ Add memory”, work in a session, or run: omni-memory remember "…"</span>';
     list.querySelectorAll('[data-mem]').forEach(el=>el.onclick=()=>openMemoryInspector(byId[el.dataset.mem])); };
   draw('');
   view.querySelector('.search').oninput = e => draw(e.target.value.toLowerCase());
   document.getElementById('addmem').onclick = ()=>openMemoryInspector(null);
+  view.querySelectorAll('[data-kind]').forEach(el=>el.onclick=()=>{
+    kindFilter = (kindFilter===el.dataset.kind) ? null : el.dataset.kind;
+    view.querySelectorAll('[data-kind]').forEach(t=>t.style.outline = t.dataset.kind===kindFilter?'1px solid #3a6b53':'none');
+    draw(view.querySelector('.search').value.toLowerCase());
+  });
   // surface near-duplicate clusters, offer one-click merge
   api('/api/duplicates').then(d=>{
     const groups=d.groups||[]; const btn=document.getElementById('dupbtn'); if(!btn) return;
