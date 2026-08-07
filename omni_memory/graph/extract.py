@@ -116,23 +116,54 @@ def extract_file(path: Path, root: Path) -> Optional[dict]:
     return _empty(rel, src.count("\n") + 1)
 
 
-def extract_repo(root: Path, max_files: int = 5000) -> dict:
-    """Walk the repo and merge every file's extract into one graph payload."""
+# In-process cache of per-file extracts, keyed by absolute path → (mtime_ns,
+# size, extract). The long-running dashboard watcher rebuilds the whole graph on
+# every save; parsing is the expensive step, so we re-parse ONLY files whose
+# mtime/size changed and reuse the cached extract for everything else. Assembly
+# (build.py) stays a full pass so cross-file call resolution remains correct.
+_EXTRACT_CACHE: dict = {}
+
+
+def extract_repo(root: Path, max_files: int = 5000, incremental: bool = True) -> dict:
+    """Walk the repo and merge every file's extract into one graph payload.
+
+    With `incremental` (default), unchanged files are served from the parse cache
+    so only edited files are re-parsed — the watcher stays cheap on big repos."""
     out = {"symbols": [], "calls": [], "imports": [], "bases": [],
            "backend": "tree-sitter" if available() else "ast",
-           "files_parsed": 0}
+           "files_parsed": 0, "reparsed": 0}
     n = 0
+    seen: set = set()
     for p in sorted(root.rglob("*")):
         if n >= max_files:
             break
         if not p.is_file() or _SKIP_DIRS & set(p.parts):
             continue
-        fx = extract_file(p, root)
-        if fx is None:
+        if LANGUAGES.get(p.suffix.lower()) is None:
             continue
+        key = str(p)
+        try:
+            st = p.stat()
+            stamp = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            continue
+        cached = _EXTRACT_CACHE.get(key) if incremental else None
+        if cached and cached[0] == stamp:
+            fx = cached[1]
+        else:
+            fx = extract_file(p, root)
+            if fx is None:
+                continue
+            if incremental:
+                _EXTRACT_CACHE[key] = (stamp, fx)
+            out["reparsed"] += 1
+        seen.add(key)
         n += 1
         for k in ("symbols", "calls", "imports", "bases"):
             out[k].extend(fx[k])
+    # forget deleted files so the cache can't leak or resurrect stale symbols
+    for gone in set(_EXTRACT_CACHE) - seen:
+        _EXTRACT_CACHE.pop(gone, None)
     out["files_parsed"] = n
     return out
 
