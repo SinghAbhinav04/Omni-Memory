@@ -1,0 +1,98 @@
+"""Store: memory CRUD, search, dedup/merge, re-anchor, flush, overview."""
+from omni_memory.store import Memory
+
+
+def _add(store, text, kind="fact", branch="main", files=None):
+    return store.add_memory(Memory(text=text, kind=kind, branch=branch, files=files or []))
+
+
+def test_add_and_get(store):
+    m = _add(store, "Auth uses JWT in an httpOnly cookie", kind="decision", files=["a.py"])
+    got = store.get_memory(m.id)
+    assert got["text"] == "Auth uses JWT in an httpOnly cookie"
+    assert got["kind"] == "decision"
+    assert got["files"] == ["a.py"]
+    assert got["status"] == "active"
+
+
+def test_update_memory(store):
+    m = _add(store, "original")
+    assert store.update_memory(m.id, text="edited", kind="gotcha", files=["b.py"])
+    got = store.get_memory(m.id)
+    assert got["text"] == "edited" and got["kind"] == "gotcha" and got["files"] == ["b.py"]
+
+
+def test_update_only_given_fields(store):
+    m = _add(store, "keep text", kind="fact")
+    store.update_memory(m.id, kind="todo")           # text untouched
+    got = store.get_memory(m.id)
+    assert got["text"] == "keep text" and got["kind"] == "todo"
+
+
+def test_forget_archives(store):
+    m = _add(store, "temporary")
+    assert store.forget(m.id)
+    assert store.get_memory(m.id)["status"] == "abandoned"
+
+
+def test_search_hits_memory_text(store):
+    _add(store, "the payment gateway uses Stripe PaymentIntents")
+    _add(store, "unrelated note about caching")
+    res = store.search("stripe")
+    assert any("Stripe" in m["text"] for m in res["memories"])
+    assert all("caching" not in m["text"] for m in res["memories"])
+
+
+def test_search_empty_query(store):
+    _add(store, "something")
+    assert store.search("") == {"memories": [], "symbols": []}
+
+
+def test_duplicate_detection_and_merge(store):
+    a = _add(store, "Auth uses JWT tokens in an httpOnly cookie for sessions", kind="decision")
+    b = _add(store, "Auth uses JWT tokens in httpOnly cookie for the sessions", kind="gotcha")
+    _add(store, "completely unrelated fact about kafka partitions")
+    groups = store.duplicate_groups()
+    assert len(groups) == 1 and len(groups[0]) == 2
+    archived = store.merge_memories(a.id, [b.id])
+    assert archived == 1
+    assert store.get_memory(b.id)["status"] == "abandoned"
+    assert len(store.memories(status="active")) == 2  # kept + unrelated
+
+
+def test_reanchor_clears_stale(store):
+    m = _add(store, "anchored fact")
+    store.set_stale(m.id, True, 123.0, ["svc.py"])
+    assert store.get_memory(m.id)["stale"]
+    assert store.reanchor_memory(m.id, "deadbeef1234")
+    got = store.get_memory(m.id)
+    assert not got["stale"] and got["commit_range"] == "deadbeef1234"
+
+
+def test_flush_scopes(store, repo):
+    from omni_memory import branch as branchmod
+    _add(store, "a memory")
+    branchmod.full_refresh(store, repo)              # builds code graph + branches
+    assert store.has_code_graph()
+    store.flush("graph")
+    assert not store.has_code_graph()
+    assert len(store.memories(status="active")) == 1  # memory survived a graph flush
+    store.flush("all")
+    assert len(store.memories(status="active")) == 0
+
+
+def test_overview_shape(store, repo):
+    from omni_memory import branch as branchmod
+    _add(store, "d1", kind="decision")
+    _add(store, "g1", kind="gotcha")
+    branchmod.full_refresh(store, repo)
+    ov = store.overview()
+    assert ov["memories"]["active"] == 2
+    assert ov["kinds"].get("decision") == 1
+    assert ov["code"]["symbols"] > 0
+    assert ov["branches"]["total"] >= 1
+
+
+def test_self_ignore_written(store, repo):
+    # opening the store (the `store` fixture) creates .omni-memory/.gitignore = *
+    assert (repo / ".omni-memory" / ".gitignore").read_text().strip() == "*"
