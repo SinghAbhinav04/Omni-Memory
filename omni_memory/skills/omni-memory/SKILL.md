@@ -28,7 +28,8 @@ omni-memory used <id> …       # cite memories you relied on (improves ranking)
 omni-memory gc [--dry-run]    # quarantine dead/false memory (abandoned branches, stale)
 omni-memory restore <id|branch>  # un-quarantine
 omni-memory flush [--scope all|memory|graph] [-y]  # wipe store to rebuild from scratch
-omni-memory install [--platform claude-code|antigravity]  # wire hooks + AGENTS.md
+omni-memory bind [claude-code|antigravity]  # one-command onboarding (auto-detects IDE)
+omni-memory install [--platform claude-code|antigravity]  # explicit wire hooks + AGENTS.md
 ```
 
 ## Agent-driven extraction (runs INSIDE this agent — no API key)

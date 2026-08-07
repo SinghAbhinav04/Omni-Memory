@@ -43,6 +43,27 @@ def install(platform: str = "claude-code") -> int:
     return 1
 
 
+def detect_ide(root: Path) -> str:
+    """Best-guess which IDE this project uses, from files it leaves behind.
+    Falls back to 'claude-code' (the richest integration) when unsure."""
+    if (root / ".claude").exists() or (root / "CLAUDE.md").exists():
+        return "claude-code"
+    if (root / ".antigravity").exists() or (root / ".gemini").exists():
+        return "antigravity"
+    return "claude-code"
+
+
+def bind(ide: str = "auto") -> int:
+    """One-command onboarding: wire OmniMemory into the given IDE (or auto-detect),
+    which for every IDE writes/refreshes the repo-root AGENTS.md and, where the IDE
+    supports it (Claude Code), also installs the session hooks."""
+    root = find_project_root()
+    if ide in ("", "auto"):
+        ide = detect_ide(root)
+        print(f"[*] auto-detected IDE: {ide}  (override: omni-memory bind <ide>)")
+    return install(platform=ide)
+
+
 def _install_claude_code() -> int:
     # 1) link the skill globally
     skills = Path.home() / ".claude" / "skills"

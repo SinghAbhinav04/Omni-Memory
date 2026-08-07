@@ -414,8 +414,16 @@ def cmd_ui(args):
 
 
 def cmd_install(args):
+    """`install [--platform]` — wire hooks + AGENTS.md into a specific IDE."""
     from . import install
     return install.install(platform=args.platform)
+
+
+def cmd_bind(args):
+    """`bind [ide]` — one-command onboarding; auto-detects the IDE if not given
+    and sets up hooks (where supported) + the cross-IDE AGENTS.md."""
+    from . import install
+    return install.bind(ide=args.ide or "auto")
 
 
 def main(argv=None):
@@ -457,6 +465,10 @@ def main(argv=None):
     ky = sub.add_parser("key"); ky.add_argument("provider", choices=["gemini", "anthropic", "openai"])
     ui = sub.add_parser("ui"); ui.add_argument("--port", type=int, default=7777)
     ins = sub.add_parser("install"); ins.add_argument("--platform", default="claude-code")
+    bn = sub.add_parser("bind")
+    bn.add_argument("ide", nargs="?", default="auto",
+                    choices=["auto", "claude-code", "antigravity"],
+                    help="which IDE to bind (default: auto-detect)")
 
     args = p.parse_args(argv)
     dispatch = {
@@ -467,7 +479,7 @@ def main(argv=None):
         "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,
-        "flush": cmd_flush,
+        "flush": cmd_flush, "bind": cmd_bind,
     }
     return dispatch[args.cmd](args)
 
