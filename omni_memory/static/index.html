@@ -50,6 +50,7 @@
     <a data-tab="docs">Docs</a>
     <a data-tab="graph">Graph</a>
     <a data-tab="branches">Repo Graph</a>
+    <a id="flushbtn" title="Wipe stored memory/graph so it can be rebuilt from scratch">Flush</a>
   </nav>
   <main>
     <header id="hdr">loading…</header>
@@ -69,10 +70,25 @@ async function api(p){
 function esc(s){ return (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
 let activeTab = 'memory';
-document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>{
+document.querySelectorAll('nav a[data-tab]').forEach(a=>a.onclick=()=>{
   document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on'));
   a.classList.add('on'); activeTab = a.dataset.tab; render(activeTab);
 });
+
+document.getElementById('flushbtn').onclick = async ()=>{
+  const scope = prompt('Flush what? Type: all · memory · graph\n(This wipes stored data so it can be rebuilt — cannot be undone.)', 'all');
+  if(!scope) return;
+  if(!['all','memory','graph'].includes(scope.trim())){ alert('Enter one of: all, memory, graph'); return; }
+  if(!confirm('Flush "'+scope.trim()+'" for this project? This cannot be undone.')) return;
+  try {
+    const r = await fetch('/api/flush?scope='+encodeURIComponent(scope.trim()), {method:'POST'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    const total = Object.values(d.flushed||{}).reduce((a,b)=>a+b,0);
+    alert('Flushed '+total+' rows. Rebuild with omni-memory build / map.');
+    render(activeTab);
+  } catch(e){ alert('Flush failed: '+e.message); }
+};
 
 async function render(tab){
   view.innerHTML = '<span class="hint">loading…</span>';

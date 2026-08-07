@@ -290,6 +290,29 @@ class Store:
         edges = [dict(r) for r in self.db.execute("SELECT * FROM code_edges")]
         return nodes, edges
 
+    def flush(self, scope: str = "all") -> dict:
+        """Wipe stored data so it can be rebuilt from scratch. Settings in `meta`
+        (enabled, branch_aware, default_branch) are preserved. Returns row counts
+        deleted per table.
+
+          all    → memory + flows + branches + commits + code graph
+          memory → memory + flows only
+          graph  → code graph only (code_nodes/code_edges)
+        """
+        groups = {
+            "memory": ["memory", "flows"],
+            "graph": ["code_nodes", "code_edges"],
+            "all": ["memory", "flows", "branches", "commits",
+                    "code_nodes", "code_edges"],
+        }
+        tables = groups.get(scope, groups["all"])
+        counts = {}
+        for t in tables:
+            counts[t] = self.db.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
+            self.db.execute(f"DELETE FROM {t}")
+        self.db.commit()
+        return counts
+
     def has_code_graph(self) -> bool:
         return bool(self.db.execute("SELECT 1 FROM code_nodes LIMIT 1").fetchone())
 

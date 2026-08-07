@@ -259,6 +259,35 @@ def _read_transcript(path):
     return "\n".join(out)[-140_000:]
 
 
+def cmd_flush(args):
+    """Wipe stored memory/graph so it can be rebuilt from scratch."""
+    s, root = _store()
+    scope = args.scope
+    what = {"all": "ALL memory + code graph + git topology",
+            "memory": "memories only", "graph": "code graph only"}[scope]
+    if not args.yes:
+        ans = input(f"Flush {what} for this project? This cannot be undone. [y/N] ")
+        if ans.strip().lower() not in ("y", "yes"):
+            print("Aborted.")
+            return 1
+    counts = s.flush(scope)
+    total = sum(counts.values())
+    print(f"[+] flushed {total} rows: " +
+          ", ".join(f"{k}={v}" for k, v in counts.items() if v))
+    # keep the derived artifacts consistent with the now-empty store
+    try:
+        digest.write_digest(s)
+        from . import agentsmd
+        agentsmd.write(s, root)
+    except Exception:  # noqa: BLE001
+        pass
+    hint = {"all": "omni-memory build   (or map + check)",
+            "memory": "omni-memory build",
+            "graph": "omni-memory map"}[scope]
+    print(f"    rebuild with: {hint}")
+    return 0
+
+
 def cmd_hook(args):
     """Claude Code hook entrypoint (reads the event JSON on stdin)."""
     try:
@@ -267,6 +296,20 @@ def cmd_hook(args):
         data = {}
     s, root = _store()
     if not s.get_meta("enabled", True):
+        return 0
+    if args.event == "start":                  # SessionStart → refresh + ensure AGENTS.md
+        # Cheap incremental refresh (reads the persisted store + a light git/graph
+        # rebuild — NOT a full re-read of the repo) so a new session in any IDE
+        # opens already-current, then make sure the canonical context file exists.
+        try:
+            branchmod.full_refresh(s, root)
+        except Exception:  # noqa: BLE001
+            pass
+        from . import agentsmd
+        agentsmd.write(s, root)
+        block = inject.build_block(s, root, query="")
+        if block:
+            print(block)                        # seed the session context
         return 0
     if args.event == "inject":                 # UserPromptSubmit → add memory to context
         block = inject.build_block(s, root, query=data.get("prompt", ""))
@@ -282,6 +325,11 @@ def cmd_hook(args):
                 "SELECT id FROM memory WHERE status='active'")}
             bumped = s.bump_uses(sm.extract_citations(text, ids))
             digest.write_digest(s)
+            try:
+                from . import agentsmd
+                agentsmd.write(s, root)
+            except Exception:  # noqa: BLE001
+                pass
             print(f"omni-memory: captured {n} memories, +{bumped} citations",
                   file=sys.stderr)
         return 0
@@ -391,7 +439,10 @@ def main(argv=None):
                                                    choices=["build", "session"])
     ar = sub.add_parser("artifact"); ar.add_argument("which", nargs="?", default="all",
                                                      choices=["apimap", "linkup", "all"])
-    hk = sub.add_parser("hook"); hk.add_argument("event", choices=["inject", "capture"])
+    fl = sub.add_parser("flush")
+    fl.add_argument("--scope", choices=["all", "memory", "graph"], default="all")
+    fl.add_argument("--yes", "-y", action="store_true", help="skip confirmation")
+    hk = sub.add_parser("hook"); hk.add_argument("event", choices=["start", "inject", "capture"])
     ky = sub.add_parser("key"); ky.add_argument("provider", choices=["gemini", "anthropic", "openai"])
     ui = sub.add_parser("ui"); ui.add_argument("--port", type=int, default=7777)
     ins = sub.add_parser("install"); ins.add_argument("--platform", default="claude-code")
@@ -405,6 +456,7 @@ def main(argv=None):
         "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,
+        "flush": cmd_flush,
     }
     return dispatch[args.cmd](args)
 

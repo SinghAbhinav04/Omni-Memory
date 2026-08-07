@@ -28,6 +28,7 @@ def _hook_cmd(event: str) -> str:
 
 def _hooks_block() -> dict:
     return {
+        "SessionStart": [{"hooks": [{"type": "command", "command": _hook_cmd("start")}]}],
         "UserPromptSubmit": [{"hooks": [{"type": "command", "command": _hook_cmd("inject")}]}],
         "SessionEnd": [{"hooks": [{"type": "command", "command": _hook_cmd("capture")}]}],
     }
@@ -73,16 +74,35 @@ def _install_claude_code() -> int:
         hooks[event] = existing + val
     settings.write_text(json.dumps(data, indent=2))
     print(f"[+] hooks written → {settings}")
+    print("    SessionStart     → refreshes + seeds verified memory (incremental)")
     print("    UserPromptSubmit → injects verified memory (enforced)")
     print("    SessionEnd       → captures the session (via your agent, no key)")
+    _write_agents_md(proj)
     print("\n[+] Restart Claude Code in this project. Then just work — memory")
     print("    injects every prompt and updates itself when the session ends.")
     return 0
 
 
+def _write_agents_md(proj: Path) -> None:
+    """Create/refresh the canonical AGENTS.md every AI IDE reads on session start."""
+    try:
+        from . import agentsmd
+        from .store import Store
+        path = agentsmd.write(Store(proj), proj)
+        print(f"[+] canonical context written → {path}  (read by any AI IDE)")
+    except Exception as e:  # noqa: BLE001
+        print(f"[!] couldn't write AGENTS.md ({e})")
+
+
 def _install_antigravity() -> int:
-    print("[+] Antigravity: register OmniMemory as an MCP server (P1).")
-    print("    Meanwhile: the MEMORY.md digest can be added as a persistent artifact,")
-    print(f"    and the skill/config lives at: {SKILL_SRC}")
-    print("    Set OMNI_AGENT_CMD to Antigravity's CLI for headless capture.")
+    """Antigravity reads AGENTS.md at the repo root as project context, so the
+    canonical file is the portable integration. (MCP server is the richer P1
+    path; the file works today with zero config.)"""
+    proj = find_project_root()
+    _write_agents_md(proj)
+    print("[+] Antigravity picks up AGENTS.md automatically as project context.")
+    print("    Keep it fresh with either:")
+    print("      • `omni-memory ui` running (the watcher refreshes AGENTS.md live), or")
+    print("      • `omni-memory hook start` at session start (or any capture/build).")
+    print("    Optional headless capture: set OMNI_AGENT_CMD to Antigravity's CLI.")
     return 0

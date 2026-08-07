@@ -27,7 +27,8 @@ omni-memory forget <id>       # archive a stale memory
 omni-memory used <id> …       # cite memories you relied on (improves ranking)
 omni-memory gc [--dry-run]    # quarantine dead/false memory (abandoned branches, stale)
 omni-memory restore <id|branch>  # un-quarantine
-omni-memory install           # wire hooks + skill into this agent
+omni-memory flush [--scope all|memory|graph] [-y]  # wipe store to rebuild from scratch
+omni-memory install [--platform claude-code|antigravity]  # wire hooks + AGENTS.md
 ```
 
 ## Agent-driven extraction (runs INSIDE this agent — no API key)
@@ -55,6 +56,14 @@ Headless (SessionEnd hook) uses the `claude -p` CLI or an optional API key
 3. **End of task:** extract memory from what happened and pipe JSON to
    `omni-memory capture` (array of `{kind,text,files,symbols}`). The SessionEnd
    hook does this automatically once installed.
+
+## Cross-IDE auto-injection (Claude Code, Antigravity, …)
+OmniMemory maintains a canonical **`AGENTS.md`** at the repo root — a delimited
+managed block that every AI IDE reads as project context on session start, so a
+fresh session in *any* IDE auto-loads verified memory. It's rendered from the
+persisted `.omni-memory/` store (no re-reading the whole repo) and refreshed on
+every capture/build, by the dashboard watcher, and by the `SessionStart` hook.
+`omni-memory install --platform antigravity` writes it for Antigravity too.
 
 ## Branch awareness
 Memory is scoped to the current git branch + its base. On merge, that branch's

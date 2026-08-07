@@ -34,7 +34,13 @@ def full_refresh(store: Store, root: Path) -> dict:
         codegraph.build_code_graph(store, root)
     except Exception:  # noqa: BLE001 — fall back to file-level staleness
         pass
-    return sync_git(store, root)
+    snap = sync_git(store, root)
+    try:  # keep the IDE-agnostic AGENTS.md context current for the next session
+        from . import agentsmd
+        agentsmd.write(store, root)
+    except Exception:  # noqa: BLE001
+        pass
+    return snap
 
 
 def classify_branches(store: Store, root: Path) -> list[tuple]:

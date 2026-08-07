@@ -50,6 +50,20 @@ def _handler(root: Path):
                 except Exception:  # noqa: BLE001
                     pass
 
+        def do_POST(self):
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            try:
+                if u.path == "/api/flush":
+                    scope = q.get("scope", ["all"])[0]
+                    counts = Store(root).flush(scope)
+                    # rebuild so the just-emptied views repopulate from disk
+                    _refresh(root)
+                    return self._send(200, json.dumps({"ok": True, "flushed": counts}))
+                return self._send(404, json.dumps({"error": "not found"}))
+            except Exception as e:  # noqa: BLE001
+                return self._send(500, json.dumps({"error": str(e)}))
+
         def _route(self):
             # A fresh Store (SQLite connection) per request: the threading server
             # runs requests on worker threads, and one shared connection isn't

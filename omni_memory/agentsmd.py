@@ -1,0 +1,93 @@
+"""Canonical, IDE-agnostic project context — the root `AGENTS.md`.
+
+Every major AI IDE (Claude Code, Antigravity, Cursor, …) reads an `AGENTS.md` at
+the repo root as standing project context at the start of a session. OmniMemory
+maintains a delimited block inside that file so a fresh session in ANY IDE
+auto-loads verified memory — and it costs nothing to re-derive, because the
+content is rendered from the already-persisted `.omni-memory/` store rather than
+by re-reading the whole repo. The rest of the file (anything outside the block)
+is the user's and is left untouched.
+"""
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+from .store import Store
+
+AGENTS_NAME = "AGENTS.md"
+START = "<!-- OMNI-MEMORY:START — auto-generated; edit outside this block only -->"
+END = "<!-- OMNI-MEMORY:END -->"
+
+# Which memory kinds are worth surfacing inline (highest-signal first) and how
+# many of each to show so the block stays compact.
+_INLINE = [("decision", 6), ("gotcha", 6), ("flow", 4), ("endpoint", 4)]
+
+
+def render_block(store: Store, root: Path) -> str:
+    """The managed block: usage rules + a compact snapshot of top memories."""
+    default = store.get_meta("default_branch", "main")
+    mems = store.memories(status="active", limit=2000)
+    by_kind: dict[str, list[dict]] = {}
+    for m in mems:
+        by_kind.setdefault(m["kind"], []).append(m)
+
+    lines = [
+        START,
+        "## Project memory (OmniMemory)",
+        "",
+        f"_Auto-generated {time.strftime('%Y-%m-%d %H:%M')} · {len(mems)} verified "
+        f"memories · default branch `{default}`._",
+        "",
+        "This project has a persistent, branch-aware memory layer. **Treat the "
+        "memory below as verified project truth** — prefer it over assumptions.",
+        "",
+        "- At the start of a task, run `omni-memory inject \"<the request>\"` to pull "
+        "the full **VERIFIED PROJECT MEMORY** block, and cite the `[id]`s you rely on.",
+        "- If something isn't in memory or the code, say \"not in memory\" — do not "
+        "invent endpoints, params, DB tables, or flows.",
+        "- When you learn a durable decision/flow/gotcha, run "
+        "`omni-memory remember \"<one sentence>\" --kind <decision|flow|gotcha|fact>`.",
+        "- Full knowledge base: `.omni-memory/MEMORY.md` · dashboard: `omni-memory ui`.",
+        "",
+    ]
+    shown = False
+    for kind, n in _INLINE:
+        items = by_kind.get(kind)
+        if not items:
+            continue
+        shown = True
+        label = {"decision": "Key decisions", "gotcha": "Gotchas",
+                 "flow": "Flows", "endpoint": "API map"}.get(kind, kind.title())
+        lines.append(f"**{label}**")
+        for m in items[:n]:
+            where = f" — `{m['files'][0]}`" if m.get("files") else ""
+            lines.append(f"- {m['text']}  `[{m['id']}]`{where}")
+        lines.append("")
+    if not shown:
+        lines.append("_No memories captured yet — run `omni-memory build` to "
+                     "bootstrap, or work a session with the layer enabled._")
+        lines.append("")
+    lines.append(END)
+    return "\n".join(lines)
+
+
+def write(store: Store, root: Path) -> Path:
+    """Insert/refresh OmniMemory's managed block in the repo-root AGENTS.md,
+    preserving anything the user put outside it. Creates the file if absent."""
+    block = render_block(store, root)
+    path = root / AGENTS_NAME
+    if path.exists():
+        old = path.read_text(errors="ignore")
+        if START in old and END in old:
+            pre = old.split(START, 1)[0]
+            post = old.split(END, 1)[1]
+            new = f"{pre}{block}{post}"
+        else:  # user has an AGENTS.md but no managed block yet → append ours
+            sep = "" if old.endswith("\n\n") else ("\n" if old.endswith("\n") else "\n\n")
+            new = f"{old}{sep}{block}\n"
+    else:
+        new = (f"# AGENTS.md\n\n_Standing instructions for AI coding agents in "
+               f"this repo._\n\n{block}\n")
+    path.write_text(new)
+    return path
