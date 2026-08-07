@@ -108,6 +108,20 @@ def test_export_import_roundtrip(store, tmp_path):
     assert src_ids == dst_ids                          # ids preserved → citations survive
 
 
+def test_committed_memory_bootstraps_on_fresh_clone(store, repo):
+    import json
+    from omni_memory import cli
+    (repo / "omni-memory.json").write_text(json.dumps({
+        "omni_memory_export": 1,
+        "memories": [{"id": "aaa111bbb222", "kind": "decision",
+                      "text": "Auth uses JWT in httpOnly cookie", "branch": "main"}]}))
+    assert len(store.memories(status="active")) == 0
+    cli._bootstrap_shared(store, repo)                 # fresh clone → auto-load
+    assert len(store.memories(status="active")) == 1
+    cli._bootstrap_shared(store, repo)                 # store non-empty → skip
+    assert len(store.memories(status="active")) == 1
+
+
 def test_self_ignore_written(store, repo):
     # opening the store (the `store` fixture) creates .omni-memory/.gitignore = *
     assert (repo / ".omni-memory" / ".gitignore").read_text().strip() == "*"

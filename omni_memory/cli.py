@@ -19,6 +19,7 @@ def _store():
 def cmd_status(args):
     """`status` — layer state, current branch, memory counts, AI provider, store path."""
     s, root = _store()
+    _bootstrap_shared(s, root)                 # fresh clone → load committed memory
     branchmod.sync_git(s, root)
     c = s.counts()
     on = s.get_meta("enabled", True)
@@ -401,6 +402,25 @@ def cmd_hook(args):
         return 0
 
 
+def _bootstrap_shared(s, root):
+    """Fresh clone with committed memory: auto-load `omni-memory.json` the first
+    time (store still empty) so a teammate/other machine starts already-remembered
+    without running `import`. Idempotent — skips once the store has memories."""
+    try:
+        if s.counts().get("active", 0) > 0:
+            return
+        shared = root / "omni-memory.json"
+        if not shared.exists():
+            return
+        n = s.import_memories(json.loads(shared.read_text()), source="shared")
+        if n:
+            digest.write_digest(s)
+            print(f"omni-memory: bootstrapped {n} shared memories from "
+                  "omni-memory.json", file=sys.stderr)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _run_hook(args):
     try:
         data = json.load(sys.stdin)
@@ -410,6 +430,7 @@ def _run_hook(args):
     if not s.get_meta("enabled", True):
         return 0
     if args.event == "start":                  # SessionStart → refresh + ensure AGENTS.md
+        _bootstrap_shared(s, root)             # fresh clone → load committed memory
         # Rebuild ONLY if git state changed since last time (the code graph is
         # persisted in SQLite) — so opening a session doesn't re-parse the whole
         # repo when nothing moved. Memory injected below comes from the store, not

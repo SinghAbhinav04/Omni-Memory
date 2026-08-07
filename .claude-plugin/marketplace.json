@@ -10,7 +10,7 @@
       "name": "omni-memory",
       "source": "./",
       "description": "Persistent, branch-aware, git-anchored memory & context layer for coding agents. Stops the agent forgetting between sessions and hallucinating unverified architecture. Zero-dependency engine rides along — no pip install required.",
-      "version": "0.9.4",
+      "version": "0.9.5",
       "license": "MIT",
       "author": { "name": "Abhinav Singh", "url": "https://github.com/SinghAbhinav04" },
       "homepage": "https://github.com/SinghAbhinav04/Omni-Memory",
