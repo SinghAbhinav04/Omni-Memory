@@ -40,6 +40,28 @@ def test_classify_marks_abandoned(store, repo):
     assert row and row["status"] == "abandoned"
 
 
+def test_refresh_if_stale_skips_when_unchanged(store, repo):
+    assert branchmod.refresh_if_stale(store, repo) is True   # cold → build
+    assert branchmod.refresh_if_stale(store, repo) is False  # unchanged → skip
+    (repo / "svc.py").write_text((repo / "svc.py").read_text() + "\ndef added():\n    return 0\n")
+    assert branchmod.refresh_if_stale(store, repo) is True   # changed → rebuild
+
+
+def test_hook_never_raises(store, repo, monkeypatch):
+    """A failing hook must degrade to a no-op (return 0), never crash the session."""
+    import io
+    import omni_memory.cli as cli
+    import omni_memory.inject as inject
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(inject, "build_block",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"prompt": "hi"}'))
+
+    class Args:
+        event = "inject"
+    assert cli.cmd_hook(Args()) == 0
+
+
 def test_agents_md_managed_block(store, repo):
     store.add_memory(Memory(text="Auth uses JWT in an httpOnly cookie",
                             kind="decision", branch="main"))

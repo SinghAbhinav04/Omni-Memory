@@ -300,7 +300,16 @@ def cmd_flush(args):
 
 
 def cmd_hook(args):
-    """Claude Code hook entrypoint (reads the event JSON on stdin)."""
+    """Claude Code hook entrypoint. MUST NEVER raise — a hook that errors would
+    disrupt the user's prompt/session — so the whole body is guarded and any
+    failure degrades to a silent no-op."""
+    try:
+        return _run_hook(args)
+    except Exception:  # noqa: BLE001 — a broken hook must not break the session
+        return 0
+
+
+def _run_hook(args):
     try:
         data = json.load(sys.stdin)
     except Exception:  # noqa: BLE001
@@ -309,13 +318,11 @@ def cmd_hook(args):
     if not s.get_meta("enabled", True):
         return 0
     if args.event == "start":                  # SessionStart → refresh + ensure AGENTS.md
-        # Cheap incremental refresh (reads the persisted store + a light git/graph
-        # rebuild — NOT a full re-read of the repo) so a new session in any IDE
-        # opens already-current, then make sure the canonical context file exists.
-        try:
-            branchmod.full_refresh(s, root)
-        except Exception:  # noqa: BLE001
-            pass
+        # Rebuild ONLY if git state changed since last time (the code graph is
+        # persisted in SQLite) — so opening a session doesn't re-parse the whole
+        # repo when nothing moved. Memory injected below comes from the store, not
+        # from re-reading files.
+        branchmod.refresh_if_stale(s, root)
         from . import agentsmd
         agentsmd.write(s, root)
         block = inject.build_block(s, root, query="")

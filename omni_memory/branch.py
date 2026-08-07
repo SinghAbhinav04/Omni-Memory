@@ -40,7 +40,23 @@ def full_refresh(store: Store, root: Path) -> dict:
         agentsmd.write(store, root)
     except Exception:  # noqa: BLE001
         pass
+    try:  # remember the state we just built at, so refresh_if_stale can skip
+        store.set_meta("last_refresh_sig", gitmeta.state_signature(root))
+    except Exception:  # noqa: BLE001
+        pass
     return snap
+
+
+def refresh_if_stale(store: Store, root: Path) -> bool:
+    """Rebuild only when git state changed since the last refresh. The code graph
+    is already persisted in SQLite, so re-parsing the whole repo on every fresh
+    process (e.g. a SessionStart hook) is wasted work when nothing moved. Returns
+    True if it rebuilt."""
+    sig = gitmeta.state_signature(root)
+    if sig and sig == store.get_meta("last_refresh_sig") and store.has_code_graph():
+        return False
+    full_refresh(store, root)
+    return True
 
 
 def classify_branches(store: Store, root: Path) -> list[tuple]:
