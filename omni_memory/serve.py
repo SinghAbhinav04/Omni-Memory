@@ -137,6 +137,14 @@ def _handler(root: Path):
             if u.path == "/api/state":
                 # Tiny endpoint the dashboard polls to know when to re-render.
                 return self._send(200, json.dumps(_STATE))
+            if u.path == "/api/meta":
+                # Static-ish project facts the UI needs once (e.g. absolute repo
+                # path so it can build vscode://file/… deep links to symbols).
+                from . import __version__
+                return self._send(200, json.dumps({
+                    "root": str(root.resolve()),
+                    "default_branch": store.get_meta("default_branch", "main"),
+                    "version": __version__}))
             if u.path == "/api/commits":
                 return self._send(200, json.dumps(store.commits()))
             if u.path == "/api/codegraph":

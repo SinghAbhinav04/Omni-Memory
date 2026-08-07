@@ -395,6 +395,17 @@ async function renderCode(){
 // ── Inspector: the readable node dossier ──
 const insp = document.getElementById('insp');
 const KINDS = ['decision','concept','flow','event','endpoint','db','component','gotcha','assumption','todo','fact'];
+// project meta (absolute root) for editor deep-links; editor scheme is user-picked
+let META = {root:''};
+const EDITORS = {vscode:'vscode://file', cursor:'cursor://file', windsurf:'windsurf://file'};
+function editorScheme(){ return localStorage.getItem('omni_editor') || 'vscode'; }
+function fileLink(file, line){
+  if(!META.root||!file) return '';
+  const abs = META.root.replace(/\/$/,'')+'/'+file;
+  const url = EDITORS[editorScheme()]+'/'+abs+(line?':'+line:'');
+  return `<a href="${esc(url)}" title="open in ${editorScheme()}" style="color:#8fc7f0;text-decoration:none">${esc(file)}${line?':'+line:''} ↗</a>`;
+}
+(async()=>{ try{ META = await api('/api/meta'); }catch(e){} })();
 async function post(path, body){
   const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
   if(!r.ok) throw new Error('HTTP '+r.status);
@@ -453,6 +464,9 @@ function kbadge(kind){ return `<span class="badge k-${esc(kind)}">${esc(kind)}</
 function refRow(c){ return `<div class="ref" data-goto="${esc(c.id)}">${kbadge(c.kind)}
    <span>${esc(c.name)}${c.signature?esc(c.signature):''}</span>
    <span class="mono">${esc((c.file||'').split('/').pop())}${c.line_start?':'+c.line_start:''}</span></div>`; }
+function editorPicker(){ const cur=editorScheme();
+  return `<select id="edpick" title="editor for open-in-editor links" style="width:auto;padding:2px 6px;margin:0;font-size:10px">`+
+    Object.keys(EDITORS).map(k=>`<option ${k===cur?'selected':''}>${k}</option>`).join('')+`</select>`; }
 async function openInspector(id){
   insp.classList.add('open');
   insp.innerHTML = '<div class="ibody"><span class="hint">loading…</span></div>';
@@ -468,7 +482,7 @@ async function openInspector(id){
       <button class="iclose" title="close">×</button>
       ${kbadge(d.kind)}
       <div class="iname">${esc(d.name)}</div>
-      <div class="ipath">${esc(d.file)}${d.line_start?':'+d.line_start:''}${d.line_end&&d.line_end!==d.line_start?'-'+d.line_end:''}</div>
+      <div class="ipath">${fileLink(d.file, d.line_start)||esc(d.file)} ${editorPicker()}</div>
     </div>
     <div class="ibody">
       ${d.signature?`<div class="sig">${esc(d.name)}${esc(d.signature)}</div>`:''}
@@ -483,6 +497,8 @@ async function openInspector(id){
     </div>`;
   insp.querySelector('.iclose').onclick = closeInspector;
   insp.querySelectorAll('[data-goto]').forEach(el=>el.onclick=()=>openInspector(el.dataset.goto));
+  const ep = insp.querySelector('#edpick');
+  if(ep) ep.onchange = e=>{ localStorage.setItem('omni_editor', e.target.value); openInspector(id); };
 }
 
 // ── auto-refresh: the server rebuilds on git/file changes; we poll a tiny
