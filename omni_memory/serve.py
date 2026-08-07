@@ -50,16 +50,54 @@ def _handler(root: Path):
                 except Exception:  # noqa: BLE001
                     pass
 
+        def _body(self):
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(n) if n else b""
+                return json.loads(raw or b"{}")
+            except Exception:  # noqa: BLE001
+                return {}
+
         def do_POST(self):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             try:
+                store = Store(root)
                 if u.path == "/api/flush":
                     scope = q.get("scope", ["all"])[0]
-                    counts = Store(root).flush(scope)
-                    # rebuild so the just-emptied views repopulate from disk
-                    _refresh(root)
+                    counts = store.flush(scope)
+                    _refresh(root)  # rebuild so emptied views repopulate from disk
                     return self._send(200, json.dumps({"ok": True, "flushed": counts}))
+                if u.path == "/api/memory/add":
+                    b = self._body()
+                    from .store import Memory
+                    cur, base = branchmod.scope(store, root)
+                    m = store.add_memory(Memory(
+                        text=(b.get("text") or "").strip(),
+                        kind=b.get("kind") or "fact",
+                        branch=(None if cur == "*" else cur) or "main",
+                        files=b.get("files") or [], source="dashboard"))
+                    _sync_docs(store, root)
+                    return self._send(200, json.dumps({"ok": True, "id": m.id}))
+                if u.path == "/api/memory/update":
+                    b = self._body()
+                    ok = store.update_memory(b.get("id", ""), text=b.get("text"),
+                                             kind=b.get("kind"), files=b.get("files"))
+                    _sync_docs(store, root)
+                    return self._send(200 if ok else 404,
+                                      json.dumps({"ok": ok}))
+                if u.path == "/api/memory/delete":
+                    b = self._body()
+                    ok = store.forget(b.get("id", ""))
+                    _sync_docs(store, root)
+                    return self._send(200 if ok else 404, json.dumps({"ok": ok}))
+                if u.path == "/api/doc/save":
+                    b = self._body()
+                    name = b.get("name", "")
+                    if name not in ("MEMORY.md", "api-map.md", "linkup.md"):
+                        return self._send(400, json.dumps({"error": "bad doc name"}))
+                    (store.dir / name).write_text(b.get("content", ""))
+                    return self._send(200, json.dumps({"ok": True}))
                 return self._send(404, json.dumps({"error": "not found"}))
             except Exception as e:  # noqa: BLE001
                 return self._send(500, json.dumps({"error": str(e)}))
@@ -126,6 +164,17 @@ def _handler(root: Path):
             return self._send(404, json.dumps({"error": "not found"}))
 
     return H
+
+
+def _sync_docs(store: Store, root: Path) -> None:
+    """After a dashboard memory edit, regenerate the derived artifacts so the
+    knowledge base and the cross-IDE AGENTS.md reflect the change immediately."""
+    try:
+        from . import digest, agentsmd
+        digest.write_digest(store)
+        agentsmd.write(store, root)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _refresh(root: Path) -> None:

@@ -82,6 +82,17 @@
   .stat{display:flex;gap:18px;margin-bottom:14px;flex-wrap:wrap}
   .stat .s{background:#0e0e10;border:1px solid #1c1c1f;border-radius:9px;padding:8px 14px;min-width:78px}
   .stat .s b{display:block;font-size:19px;color:#f0f0f2}.stat .s span{font-size:10px;color:#6c6c72;text-transform:uppercase;letter-spacing:.06em}
+  .btn{background:#16332a;border:1px solid #21503f;color:#8fe0b4;border-radius:8px;
+    padding:8px 14px;font:inherit;cursor:pointer;white-space:nowrap}
+  .btn:hover{background:#1c4436;border-color:#2a6b53}
+  .btn.sec{background:#111114;border-color:#2a2a30;color:#c0c0c6}.btn.sec:hover{background:#17171b}
+  .btn.danger{background:#2a1414;border-color:#4a2020;color:#e89a9a}.btn.danger:hover{background:#361a1a}
+  #insp textarea,#insp select,#insp input{width:100%;background:#0a0a0c;border:1px solid #23232a;
+    color:#e6e6e8;border-radius:8px;padding:9px 11px;font:inherit;margin:4px 0 12px}
+  #insp textarea{min-height:110px;resize:vertical;line-height:1.5}
+  .irow{display:flex;gap:8px;margin-top:6px}
+  .doc-edit{width:100%;min-height:60vh;background:#0a0a0c;border:1px solid #23232a;color:#dcdce0;
+    border-radius:8px;padding:12px;font:12px/1.6 ui-monospace,monospace;resize:vertical}
 </style></head>
 <body>
 <div id="app">
@@ -153,12 +164,30 @@ let mermaidInit=false;
 async function renderDocs(){
   const docs = await api('/api/docs');
   hdr.textContent = 'AI-written docs';
-  view.innerHTML = '<div id="docnav" style="margin-bottom:14px"></div><div id="docbody"></div>';
+  view.innerHTML = '<div id="docnav" style="margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"></div><div id="docbody"></div>';
   const nav = document.getElementById('docnav');
-  nav.innerHTML = docs.map(d=>`<span class="chip" data-doc="${d.name}" style="cursor:${d.exists?'pointer':'default'};opacity:${d.exists?1:.4}">${d.name.replace('.md','')}</span>`).join(' ');
-  const show = async name => {
+  nav.innerHTML = docs.map(d=>`<span class="chip" data-doc="${d.name}" style="cursor:${d.exists?'pointer':'default'};opacity:${d.exists?1:.4}">${d.name.replace('.md','')}</span>`).join(' ')
+    + '<button class="btn sec" id="docedit" style="margin-left:auto;padding:5px 12px">Edit</button>';
+  let current = null, editing = false;
+  const show = async (name, edit=false) => {
+    current = name; editing = edit;
     const md = await (await fetch('/api/doc?name='+encodeURIComponent(name))).text();
     const body = document.getElementById('docbody');
+    document.getElementById('docedit').textContent = edit ? 'Cancel' : 'Edit';
+    if(edit){
+      body.className = '';
+      body.innerHTML = `<textarea class="doc-edit" id="docta"></textarea>
+        <div class="irow"><button class="btn" id="docsave">Save ${esc(name)}</button>
+        <span id="docmsg" class="hint" style="align-self:center"></span></div>`;
+      body.querySelector('#docta').value = md;
+      body.querySelector('#docsave').onclick = async ()=>{
+        body.querySelector('#docmsg').textContent='Saving…';
+        try{ await post('/api/doc/save', {name, content:body.querySelector('#docta').value});
+          await show(name, false); }
+        catch(e){ body.querySelector('#docmsg').textContent='Failed: '+e.message; }
+      };
+      return;
+    }
     body.className = 'md';
     body.innerHTML = window.marked ? marked.parse(md) : '<pre>'+esc(md)+'</pre>';
     if(window.mermaid){ if(!mermaidInit){mermaid.initialize({startOnLoad:false,theme:'dark'});mermaidInit=true;}
@@ -167,6 +196,7 @@ async function renderDocs(){
       }); }
   };
   nav.querySelectorAll('[data-doc]').forEach(c=>{ if(docs.find(d=>d.name===c.dataset.doc&&d.exists)) c.onclick=()=>show(c.dataset.doc); });
+  document.getElementById('docedit').onclick = ()=>{ if(current) show(current, !editing); };
   const first = docs.find(d=>d.exists);
   if(first) show(first.name); else document.getElementById('docbody').innerHTML='<span class="hint">No docs yet — run <code>omni-memory build</code> (with a model key) or <code>omni-memory artifact all</code>.</span>';
 }
@@ -178,20 +208,25 @@ async function renderMemory(){
   const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5);
   view.innerHTML =
     `<div class="stat">${top.map(([k,n])=>`<div class="s"><b>${n}</b><span>${esc(k)}</span></div>`).join('')||''}</div>`+
-    '<input class="search" placeholder="search memory…">' +
+    '<div style="display:flex;gap:10px;margin-bottom:14px">'+
+      '<input class="search" style="margin:0" placeholder="search memory…">'+
+      '<button class="btn" id="addmem">+ Add memory</button></div>'+
     '<div id="list"></div>';
   const list = document.getElementById('list');
+  const byId = {}; mems.forEach(m=>byId[m.id]=m);
   const draw = f => { list.innerHTML = mems.filter(m=>!f||m.text.toLowerCase().includes(f))
-    .map(m=>`<div class="mem">
+    .map(m=>`<div class="mem" data-mem="${esc(m.id)}" style="cursor:pointer">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
         ${m.kind?`<span class="badge k-${esc(m.kind)}">${esc(m.kind)}</span>`:''}
         <span class="k" style="letter-spacing:.04em">${esc(m.branch)}${m.stale?' · ⚠STALE':''}</span>
-        <span class="k" style="margin-left:auto">[${m.id}]</span></div>
+        <span class="k" style="margin-left:auto">[${m.id}] ✎</span></div>
       <div class="t">${esc(m.text)}</div>
       ${(m.files||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join('')}</div>`).join('')
-      || '<span class="hint">no memories yet — work in a session or run: omni-memory remember "…"</span>'; };
+      || '<span class="hint">no memories yet — click “+ Add memory”, work in a session, or run: omni-memory remember "…"</span>';
+    list.querySelectorAll('[data-mem]').forEach(el=>el.onclick=()=>openMemoryInspector(byId[el.dataset.mem])); };
   draw('');
   view.querySelector('.search').oninput = e => draw(e.target.value.toLowerCase());
+  document.getElementById('addmem').onclick = ()=>openMemoryInspector(null);
 }
 
 async function renderGraph(){
@@ -248,6 +283,13 @@ async function renderGraph(){
       node.style('opacity',n=>keep.has(n.id)?1:.12);
       link.style('stroke-opacity',l=>(l.source.id===d.id||l.target.id===d.id)?.95:.04); })
     .on('mouseleave',()=>{ node.style('opacity',1); link.style('stroke-opacity',1); });
+  // click a memory node → open the editable inspector
+  let memIndex=null;
+  node.on('click', async (e,d)=>{
+    if(!(d.id&&d.id.startsWith('mem:'))) return;
+    if(!memIndex){ memIndex={}; (await api('/api/memories')).forEach(m=>memIndex[m.id]=m); }
+    const m = memIndex[d.id.slice(4)]; if(m) openMemoryInspector(m);
+  });
 
   sim.on('tick',()=>{ link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
       .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
@@ -352,7 +394,61 @@ async function renderCode(){
 
 // ── Inspector: the readable node dossier ──
 const insp = document.getElementById('insp');
+const KINDS = ['decision','concept','flow','event','endpoint','db','component','gotcha','assumption','todo','fact'];
+async function post(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return await r.json();
+}
 function closeInspector(){ insp.classList.remove('open'); insp.innerHTML=''; }
+
+// Editable memory inspector — mem=null means "add new"
+function openMemoryInspector(mem){
+  const isNew = !mem;
+  mem = mem || {id:'', kind:'fact', text:'', files:[], branch:''};
+  insp.classList.add('open');
+  insp.innerHTML = `
+    <div class="ihead">
+      <button class="iclose" title="close">×</button>
+      <span class="badge k-${esc(mem.kind)}" id="kbadge">${esc(mem.kind)}</span>
+      <div class="iname">${isNew?'New memory':'Edit memory'}</div>
+      <div class="ipath">${isNew?'added via dashboard':esc(mem.branch)+' · ['+esc(mem.id)+']'}</div>
+    </div>
+    <div class="ibody">
+      <div class="sec">Kind</div>
+      <select id="mkind">${KINDS.map(k=>`<option ${k===mem.kind?'selected':''}>${k}</option>`).join('')}</select>
+      <div class="sec">Text</div>
+      <textarea id="mtext" placeholder="One clear sentence of durable project knowledge…">${esc(mem.text)}</textarea>
+      <div class="sec">Files (comma-separated, optional)</div>
+      <input id="mfiles" value="${esc((mem.files||[]).join(', '))}">
+      <div class="irow">
+        <button class="btn" id="msave">${isNew?'Add':'Save'}</button>
+        ${isNew?'':'<button class="btn danger" id="mdel">Delete</button>'}
+        <button class="btn sec" id="mcancel">Cancel</button>
+      </div>
+      <div id="mmsg" class="hint" style="margin-top:10px"></div>
+    </div>`;
+  const $=s=>insp.querySelector(s);
+  $('.iclose').onclick = $('#mcancel').onclick = closeInspector;
+  $('#mkind').onchange = e=>{ const b=$('#kbadge'); b.className='badge k-'+e.target.value; b.textContent=e.target.value; };
+  $('#msave').onclick = async ()=>{
+    const text=$('#mtext').value.trim(); if(!text){ $('#mmsg').textContent='Text is required.'; return; }
+    const files=$('#mfiles').value.split(',').map(s=>s.trim()).filter(Boolean);
+    const kind=$('#mkind').value;
+    $('#mmsg').textContent='Saving…';
+    try{
+      if(isNew) await post('/api/memory/add', {text,kind,files});
+      else await post('/api/memory/update', {id:mem.id,text,kind,files});
+      closeInspector(); if(activeTab==='memory') render('memory');
+    }catch(e){ $('#mmsg').textContent='Failed: '+e.message; }
+  };
+  if(!isNew) $('#mdel').onclick = async ()=>{
+    if(!confirm('Delete (archive) this memory?')) return;
+    try{ await post('/api/memory/delete', {id:mem.id}); closeInspector();
+      if(activeTab==='memory') render('memory'); }
+    catch(e){ $('#mmsg').textContent='Failed: '+e.message; }
+  };
+}
 function kbadge(kind){ return `<span class="badge k-${esc(kind)}">${esc(kind)}</span>`; }
 function refRow(c){ return `<div class="ref" data-goto="${esc(c.id)}">${kbadge(c.kind)}
    <span>${esc(c.name)}${c.signature?esc(c.signature):''}</span>

@@ -272,6 +272,30 @@ class Store:
         self.db.commit()
         return cur.rowcount > 0
 
+    def get_memory(self, mem_id: str) -> Optional[dict]:
+        r = self.db.execute("SELECT * FROM memory WHERE id=?", (mem_id,)).fetchone()
+        return self._row_to_mem(r) if r else None
+
+    def update_memory(self, mem_id: str, text: Optional[str] = None,
+                      kind: Optional[str] = None,
+                      files: Optional[list] = None) -> bool:
+        """Edit a memory in place (dashboard editing). Only provided fields change."""
+        sets, vals = [], []
+        if text is not None:
+            sets.append("text=?"); vals.append(text)
+        if kind is not None:
+            sets.append("kind=?"); vals.append(kind)
+        if files is not None:
+            sets.append("files=?"); vals.append(json.dumps(files))
+        if not sets:
+            return False
+        sets.append("updated=?"); vals.append(time.time())
+        vals.append(mem_id)
+        cur = self.db.execute(
+            f"UPDATE memory SET {','.join(sets)} WHERE id=?", vals)
+        self.db.commit()
+        return cur.rowcount > 0
+
     def counts(self) -> dict[str, int]:
         rows = self.db.execute(
             "SELECT status, COUNT(*) c FROM memory GROUP BY status").fetchall()
