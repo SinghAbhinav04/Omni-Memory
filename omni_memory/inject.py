@@ -65,6 +65,20 @@ def build_block(store: Store, root: Path, query: str = "",
     if not mems and query:  # nothing matched: inject only a FEW top memories,
         widened = True      # not a full 20-item dump on an unrelated prompt
         mems = store.memories(branch=branch, base=base, limit=widen)
+    # layer in a few cross-project (global) memories from ~/.omni-memory so the
+    # user's standing knowledge/preferences travel into every project.
+    gitems = int(store.get_meta("inject_global_items", 3))
+    if gitems > 0:
+        try:
+            from .store import Store as _Store, global_dir
+            gs = _Store(exact_dir=global_dir())
+            seen = {m["id"] for m in mems}
+            for gm in gs.memories(query=query, limit=gitems):
+                if gm["id"] not in seen:
+                    gm["_global"] = True
+                    mems.append(gm)
+        except Exception:  # noqa: BLE001
+            pass
     if not mems:
         return ""
     scope_label = "all branches" if cur == "*" else (
@@ -79,7 +93,7 @@ def build_block(store: Store, root: Path, query: str = "",
     for m in mems:
         tag = f"[{m['id']}]"
         where = (" · " + ", ".join(m["files"][:2])) if m["files"] else ""
-        br = "" if cur != "*" else f" ({m['branch']})"
+        br = " 🌐global" if m.get("_global") else ("" if cur != "*" else f" ({m['branch']})")
         stale = " ⚠STALE" if m.get("stale") else ""
         text = m["text"] if len(m["text"]) <= _TEXT_CAP else m["text"][:_TEXT_CAP - 1] + "…"
         line = f"{tag} {m['kind']}{br}{stale}: {text}{where}"

@@ -22,7 +22,7 @@ omni-memory ui [--port]       # open the local dashboard — auto-updates itself
                               #    graph & staleness refresh live, no re-running)
 omni-memory recall <query>    # query memory instead of grepping
 omni-memory branches          # git topology + per-branch memory
-omni-memory remember "<text>" [--kind decision|fact|flow|gotcha|todo]
+omni-memory remember "<text>" [--kind …] [--global]  # --global injects into EVERY project
 omni-memory forget <id>       # archive a stale memory
 omni-memory used <id> …       # cite memories you relied on (improves ranking)
 omni-memory gc [--dry-run]    # quarantine dead/false memory (abandoned branches, stale)

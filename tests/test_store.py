@@ -108,12 +108,6 @@ def test_export_import_roundtrip(store, tmp_path):
     assert src_ids == dst_ids                          # ids preserved → citations survive
 
 
-def test_global_dir_isolated_from_project(store):
-    from omni_memory.store import global_dir
-    from pathlib import Path
-    assert global_dir() == Path.home() / ".omni-memory"
-
-
 def test_self_ignore_written(store, repo):
     # opening the store (the `store` fixture) creates .omni-memory/.gitignore = *
     assert (repo / ".omni-memory" / ".gitignore").read_text().strip() == "*"

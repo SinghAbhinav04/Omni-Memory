@@ -71,3 +71,18 @@ def _clear_extract_cache():
     extract._EXTRACT_CACHE.clear()
     yield
     extract._EXTRACT_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_global_store(tmp_path, monkeypatch):
+    """Point the global (~/.omni-memory) store at a temp dir so tests never read
+    or write the developer's real global memory."""
+    from omni_memory import store as store_mod
+    gdir = tmp_path / "global-omni"
+
+    def _fake_global_dir():
+        gdir.mkdir(exist_ok=True)
+        return gdir
+
+    monkeypatch.setattr(store_mod, "global_dir", _fake_global_dir)
+    yield

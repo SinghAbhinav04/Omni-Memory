@@ -55,7 +55,16 @@ def cmd_branch_aware(args):
 
 
 def cmd_remember(args):
-    """`remember <text> [--kind]` — add one memory by hand and refresh the digest."""
+    """`remember <text> [--kind] [--global]` — add one memory by hand. With
+    --global it goes to the shared ~/.omni-memory store and injects into EVERY
+    project (your standing preferences/knowledge)."""
+    if getattr(args, "glob", False):
+        from .store import Store, Memory, global_dir
+        gs = Store(exact_dir=global_dir())
+        m = gs.add_memory(Memory(text=" ".join(args.text), kind=args.kind,
+                                 branch="global", source="manual"))
+        print(f"[+] remembered GLOBALLY [{m.id}] ({m.kind}): {m.text}")
+        return 0
     s, root = _store()
     m = sm.remember(s, root, " ".join(args.text), kind=args.kind, source="manual")
     digest.write_digest(s)
@@ -568,7 +577,9 @@ def main(argv=None):
     sub.add_parser("status")
     sub.add_parser("on"); sub.add_parser("off")
     sub.add_parser("branch-aware")
-    r = sub.add_parser("remember"); r.add_argument("--kind", default="fact"); r.add_argument("text", nargs="+")
+    r = sub.add_parser("remember"); r.add_argument("--kind", default="fact")
+    r.add_argument("--global", dest="glob", action="store_true", help="store in the shared ~/.omni-memory (injects everywhere)")
+    r.add_argument("text", nargs="+")
     sub.add_parser("capture")
     ij = sub.add_parser("inject"); ij.add_argument("query", nargs="*"); ij.add_argument("--file", action="append")
     rc = sub.add_parser("recall"); rc.add_argument("query", nargs="+")

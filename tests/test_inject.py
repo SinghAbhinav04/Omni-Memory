@@ -40,6 +40,17 @@ def test_meta_override_lowers_budget(store, repo):
     assert len([ln for ln in small.splitlines() if ln.startswith("[")]) <= 3
 
 
+def test_global_memory_injects_into_project(store, repo):
+    from omni_memory.store import Store, Memory, global_dir
+    gs = Store(exact_dir=global_dir())          # isolated to a temp dir by conftest
+    gs.add_memory(Memory(text="ALWAYS prefer pathlib over os.path", kind="decision",
+                         branch="global"))
+    store.add_memory(Memory(text="this project uses FastAPI", kind="fact", branch="main"))
+    block = inject.build_block(store, repo, query="file paths")
+    assert "pathlib" in block and "🌐global" in block    # global travels in
+    assert "FastAPI" in block                            # alongside project memory
+
+
 def test_rules_are_compact(store, repo):
     # the enforcement rules ride every message → keep them short
     assert len(inject.ENFORCE_RULES) < 220
