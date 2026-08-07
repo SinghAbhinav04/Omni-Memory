@@ -79,8 +79,19 @@ def available() -> bool:
 def _empty(rel: str, nlines: int) -> dict:
     return {"symbols": [{"id": rel, "kind": "file", "name": rel.split("/")[-1],
                          "file": rel, "line_start": 1, "line_end": max(1, nlines),
-                         "parent": None}],
+                         "parent": None, "signature": "", "doc": "", "raises": []}],
             "calls": [], "imports": [], "bases": []}
+
+
+# call names that look like "this fires an event / message / side-effect
+# downstream" — surfaced as Emits/Publishes in the symbol dossier.
+_EMIT_HINTS = ("publish", "emit", "produce", "dispatch", "send", "enqueue",
+               "notify", "broadcast", "trigger", "post", "commit")
+
+
+def is_emit(name: str) -> bool:
+    n = (name or "").lower()
+    return any(h in n for h in _EMIT_HINTS)
 
 
 def extract_file(path: Path, root: Path) -> Optional[dict]:
@@ -126,6 +137,54 @@ def extract_repo(root: Path, max_files: int = 5000) -> dict:
     return out
 
 
+def _first_line(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    line = s.strip().splitlines()[0].strip()
+    return line[:200]
+
+
+def _ast_signature(fn) -> str:
+    """A readable `(params)` string from a FunctionDef, incl. defaults/annotations
+    at a light touch (names + *args/**kwargs + defaults marker)."""
+    a = fn.args
+    parts: list[str] = []
+    posonly = getattr(a, "posonlyargs", [])
+    for arg in posonly + a.args:
+        parts.append(arg.arg)
+    if posonly:
+        parts.insert(len(posonly), "/")
+    if a.vararg:
+        parts.append("*" + a.vararg.arg)
+    elif a.kwonlyargs:
+        parts.append("*")
+    for arg in a.kwonlyargs:
+        parts.append(arg.arg)
+    if a.kwarg:
+        parts.append("**" + a.kwarg.arg)
+    sig = "(" + ", ".join(parts) + ")"
+    ret = getattr(fn, "returns", None)
+    if ret is not None:
+        try:
+            sig += " -> " + ast.unparse(ret)  # py3.9+
+        except Exception:  # noqa: BLE001
+            pass
+    return sig
+
+
+def _ast_raises(fn) -> list[str]:
+    """Exception type names raised directly in the function body."""
+    out: list[str] = []
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Raise) and n.exc is not None:
+            exc = n.exc
+            target = exc.func if isinstance(exc, ast.Call) else exc
+            name = getattr(target, "id", None) or getattr(target, "attr", None)
+            if name and name not in out:
+                out.append(name)
+    return out
+
+
 # ── stdlib ast backend (Python, zero-dep) ──────────────────────────────────
 def _extract_python_ast(rel: str, src: str) -> dict:
     try:
@@ -163,7 +222,10 @@ def _extract_python_ast(rel: str, src: str) -> dict:
                     "id": sid, "kind": kind, "name": child.name, "file": rel,
                     "line_start": child.lineno,
                     "line_end": getattr(child, "end_lineno", child.lineno),
-                    "parent": parent_id})
+                    "parent": parent_id,
+                    "signature": _ast_signature(child) if not is_class else "",
+                    "doc": _first_line(ast.get_docstring(child)),
+                    "raises": _ast_raises(child)})
                 if is_class:
                     for b in child.bases:
                         bn = base_name(b)
@@ -219,6 +281,40 @@ def _extract_treesitter(rel: str, src: str, lang: str) -> dict:
                 return text(a)
         ids = [c for c in _descendants(n) if c.type in ("identifier", "property_identifier")]
         return text(ids[-1]) if ids else None
+
+    def signature_of(fn) -> str:
+        p = fn.child_by_field_name("parameters")
+        if p is None:  # js/ts formal_parameters, others: first param-ish child
+            p = next((k for k in fn.children
+                      if k.type.endswith("parameters") or k.type == "parameter_list"), None)
+        sig = text(p).replace("\n", " ").strip() if p is not None else "()"
+        rt = fn.child_by_field_name("return_type") or fn.child_by_field_name("type")
+        if rt is not None:
+            sig += " -> " + text(rt).strip()
+        return sig[:200]
+
+    def doc_of(fn) -> str:
+        body = fn.child_by_field_name("body")
+        if body is None:
+            return ""
+        for c in body.children:  # python: first stmt is an expression_statement>string
+            if c.type in ("expression_statement", "comment"):
+                s = next((d for d in _descendants(c) if d.type == "string"), None)
+                if s is not None or c.type == "comment":
+                    return _first_line(text(s if s is not None else c).strip("\"'`# \t/*"))
+            if c.type not in ("comment",):
+                break
+        return ""
+
+    def raises_of(fn) -> list[str]:
+        out: list[str] = []
+        for d in _descendants(fn):
+            if d.type in ("raise_statement", "throw_statement"):
+                names = [text(k) for k in _descendants(d)
+                         if k.type in ("identifier", "type_identifier")]
+                if names and names[0] not in out:
+                    out.append(names[0])
+        return out
 
     def walk(n, parent_id: str, stack: list[str], in_class: bool):
         for c in n.children:
