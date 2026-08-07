@@ -117,26 +117,26 @@ def _refresh(root: Path) -> None:
         pass
 
 
-def _watch(root: Path, stop: threading.Event, interval: float = 4.0) -> None:
+def _watch(root: Path, stop: threading.Event,
+           interval: float = 2.0, cooldown: float = 3.0) -> None:
     """Poll git state and rebuild whenever it moves, so the dashboard stays live
-    with zero manual commands. Debounced: a change must settle for one cycle
-    before we rebuild, so we don't thrash mid edit-burst. Runs an initial refresh
-    on startup regardless."""
-    last = None
-    pending = object()  # sentinel: forces the first observed sig to settle first
+    with zero manual commands. Throttled rather than debounced: the first change
+    rebuilds right away (a new branch or a save shows within ~a poll), then we
+    cool down briefly so a burst of rapid edits coalesces into one rebuild
+    instead of thrashing. Runs an initial refresh on startup regardless."""
+    last_sig = None
+    last_build = 0.0
     while not stop.is_set():
         try:
             sig = gitmeta.state_signature(root)
         except Exception:  # noqa: BLE001
             stop.wait(interval)
             continue
-        if last is None:                 # cold start → always build once
-            _refresh(root)
-            last = sig
-        elif sig != last and sig == pending:
-            _refresh(root)               # stable change → rebuild
-            last = sig
-        pending = sig
+        now = time.time()
+        if sig != last_sig and (now - last_build) >= cooldown:
+            _refresh(root)               # rebuild (also republishes _STATE)
+            last_sig = sig
+            last_build = time.time()
         stop.wait(interval)
 
 
