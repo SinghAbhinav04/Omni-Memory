@@ -299,6 +299,53 @@ def cmd_flush(args):
     return 0
 
 
+def _open_store(use_global):
+    """Project store by default, or the shared ~/.omni-memory store with --global."""
+    if use_global:
+        from .store import Store, global_dir
+        d = global_dir()
+        return Store(exact_dir=d), d
+    return _store()
+
+
+def cmd_export(args):
+    """`export [file] [--global]` — write a portable JSON snapshot of memories.
+    Default target is `omni-memory.json` at the repo root; commit it to share the
+    memory with teammates / other clones, or move it to another machine/IDE."""
+    s, root = _open_store(args.glob)
+    data = s.export_memories()
+    out = Path(args.file) if args.file else (find_project_root() / "omni-memory.json")
+    out.write_text(json.dumps(data, indent=2))
+    print(f"[+] exported {len(data['memories'])} memories → {out}")
+    if not args.file:
+        print("    tip: commit omni-memory.json to share memory across clones/IDEs.")
+    return 0
+
+
+def cmd_import(args):
+    """`import [file] [--global]` — load memories from a JSON export into this
+    store (existing ids skipped, so it's safe to re-run and to merge exports)."""
+    s, root = _open_store(args.glob)
+    src = Path(args.file) if args.file else (find_project_root() / "omni-memory.json")
+    if not src.exists():
+        print(f"no export file at {src}  (run `omni-memory export` first, or pass a path).")
+        return 1
+    try:
+        data = json.loads(src.read_text())
+    except Exception as e:  # noqa: BLE001
+        print(f"[!] couldn't read export: {e}")
+        return 1
+    n = s.import_memories(data)
+    digest.write_digest(s)
+    try:
+        from . import agentsmd
+        agentsmd.write(s, root)
+    except Exception:  # noqa: BLE001
+        pass
+    print(f"[+] imported {n} new memories from {src}")
+    return 0
+
+
 def cmd_usage(args):
     """`usage [--max-items N] [--budget CHARS]` — show the approximate token
     footprint of everything OmniMemory injects, and tune the per-prompt cost."""
@@ -558,6 +605,12 @@ def main(argv=None):
     ug = sub.add_parser("usage")
     ug.add_argument("--max-items", type=int, help="max memories injected per prompt")
     ug.add_argument("--budget", type=int, help="max chars of the injected block")
+    ex = sub.add_parser("export")
+    ex.add_argument("file", nargs="?", help="output path (default: ./omni-memory.json)")
+    ex.add_argument("--global", dest="glob", action="store_true", help="the shared ~/.omni-memory store")
+    im = sub.add_parser("import")
+    im.add_argument("file", nargs="?", help="input path (default: ./omni-memory.json)")
+    im.add_argument("--global", dest="glob", action="store_true", help="into the shared ~/.omni-memory store")
 
     args = p.parse_args(argv)
     dispatch = {
@@ -569,7 +622,7 @@ def main(argv=None):
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,
         "flush": cmd_flush, "bind": cmd_bind, "doctor": cmd_doctor,
-        "usage": cmd_usage,
+        "usage": cmd_usage, "export": cmd_export, "import": cmd_import,
     }
     return dispatch[args.cmd](args)
 

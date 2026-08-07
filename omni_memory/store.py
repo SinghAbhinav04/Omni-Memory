@@ -99,9 +99,34 @@ CREATE INDEX IF NOT EXISTS idx_cnode_name ON code_nodes(name);
 """
 
 
+def global_dir() -> Path:
+    """The user-level store, shared across every project (~/.omni-memory)."""
+    d = Path.home() / STORE_DIRNAME
+    d.mkdir(exist_ok=True)
+    gi = d / ".gitignore"
+    if not gi.exists():
+        try:
+            gi.write_text("*\n")
+        except Exception:  # noqa: BLE001
+            pass
+    return d
+
+
 class Store:
-    def __init__(self, root: Optional[Path] = None):
-        self.dir = store_dir(root)
+    def __init__(self, root: Optional[Path] = None, exact_dir: Optional[Path] = None):
+        # exact_dir bypasses project-root detection (used for the global store,
+        # so it can't be accidentally captured by a git repo above $HOME).
+        if exact_dir is not None:
+            self.dir = Path(exact_dir)
+            self.dir.mkdir(parents=True, exist_ok=True)
+            gi = self.dir / ".gitignore"
+            if not gi.exists():
+                try:
+                    gi.write_text("*\n")
+                except Exception:  # noqa: BLE001
+                    pass
+        else:
+            self.dir = store_dir(root)
         # check_same_thread=False: the dashboard server handles requests on
         # worker threads. WAL + a busy timeout let the background auto-refresh
         # watcher rebuild the code graph while HTTP requests read/write on their
@@ -286,6 +311,34 @@ class Store:
     def get_memory(self, mem_id: str) -> Optional[dict]:
         r = self.db.execute("SELECT * FROM memory WHERE id=?", (mem_id,)).fetchone()
         return self._row_to_mem(r) if r else None
+
+    def export_memories(self, status: str = "active") -> dict:
+        """A portable snapshot of memories — write it to a file to move/share a
+        project's memory across folders, machines, IDEs, or a team (commit it)."""
+        return {"omni_memory_export": 1, "exported_at": time.time(),
+                "memories": self.memories(status=status, limit=100000)}
+
+    def import_memories(self, data: dict, source: str = "imported") -> int:
+        """Load exported memories into this store. Existing ids are skipped, so
+        re-importing is idempotent and merging two exports is safe. Returns the
+        number newly added."""
+        added = 0
+        for m in data.get("memories", []):
+            mid = m.get("id") or uuid.uuid4().hex[:12]
+            if self.db.execute("SELECT 1 FROM memory WHERE id=?", (mid,)).fetchone():
+                continue
+            now = time.time()
+            self.db.execute(
+                "INSERT INTO memory(id,branch,kind,text,files,symbols,commit_range,"
+                "created,updated,status,confidence,source) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (mid, m.get("branch", "main"), m.get("kind", "fact"), m.get("text", ""),
+                 json.dumps(m.get("files", [])), json.dumps(m.get("symbols", [])),
+                 m.get("commit_range", ""), m.get("created", now), now,
+                 "active", m.get("confidence", 0.8), source))
+            added += 1
+        self.db.commit()
+        return added
 
     def overview(self) -> dict:
         """A single aggregate for the dashboard's Overview tab: memory counts by

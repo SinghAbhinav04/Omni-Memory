@@ -93,6 +93,27 @@ def test_overview_shape(store, repo):
     assert ov["branches"]["total"] >= 1
 
 
+def test_export_import_roundtrip(store, tmp_path):
+    from omni_memory.store import Store
+    _add(store, "Auth uses JWT in an httpOnly cookie", kind="decision", files=["a.py"])
+    _add(store, "never charge before the order row commits", kind="gotcha")
+    data = store.export_memories()
+    assert len(data["memories"]) == 2
+    # a second, separate store imports it
+    other = Store(exact_dir=tmp_path / "other-store")
+    assert other.import_memories(data) == 2
+    assert other.import_memories(data) == 0            # idempotent (ids skipped)
+    src_ids = {m["id"] for m in store.memories(status="active")}
+    dst_ids = {m["id"] for m in other.memories(status="active")}
+    assert src_ids == dst_ids                          # ids preserved → citations survive
+
+
+def test_global_dir_isolated_from_project(store):
+    from omni_memory.store import global_dir
+    from pathlib import Path
+    assert global_dir() == Path.home() / ".omni-memory"
+
+
 def test_self_ignore_written(store, repo):
     # opening the store (the `store` fixture) creates .omni-memory/.gitignore = *
     assert (repo / ".omni-memory" / ".gitignore").read_text().strip() == "*"
