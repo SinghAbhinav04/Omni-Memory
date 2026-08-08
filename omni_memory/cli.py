@@ -97,6 +97,15 @@ def cmd_build(args):
     s, root = _store()
     print(f"[*] building OmniMemory for {root.name} …")
     branchmod.sync_git(s, root)
+    # the CODE graph (functions/calls) — was missing here, so a first `build`
+    # left the Code Graph tab empty until the watcher/`map` ran.
+    try:
+        from .graph import build as codegraph
+        cg = codegraph.build_code_graph(s, root)
+        print(f"[+] code graph: {cg['nodes']} symbols, {cg['edges']} edges "
+              f"({cg['backend']}, {cg['files_parsed']} files)")
+    except Exception as e:  # noqa: BLE001
+        print(f"[!] code graph skipped ({e})")
     g = graphbuild.build_graph(s, root)
     (s.dir / "graph.json").write_text(json.dumps(g, indent=2))
 

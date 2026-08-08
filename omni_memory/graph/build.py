@@ -23,6 +23,13 @@ def build_code_graph(store: Store, root: Path) -> dict:
     parsed, node/edge/kind counts) for the CLI."""
     fx = extract.extract_repo(root)
     nodes, edges = _assemble(fx)
+    # Never clobber a good graph with an empty one: a transient read error or a
+    # file set the backend can't parse (e.g. a non-Python repo with tree-sitter
+    # absent) would otherwise wipe the Code Graph to 0. Keep the previous one.
+    real = [n for n in nodes if n["kind"] != "file"]
+    if not real and store.has_code_graph():
+        return {"backend": fx["backend"], "files_parsed": fx["files_parsed"],
+                "nodes": 0, "edges": 0, "kinds": {}, "rels": {}, "kept_previous": True}
     store.replace_code_graph(nodes, edges)
     kinds = {}
     for n in nodes:

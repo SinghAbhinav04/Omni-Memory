@@ -78,6 +78,11 @@
   .pill-emit{background:#2a2410;color:#e6cf8a;border:1px solid #3a3218}
   .pill-call{background:#14202a;color:#9cc9e0;border:1px solid #1c2f3a}
   .empty{color:#55555c;font-size:12px;font-style:italic}
+  #insp .conns{display:flex;flex-wrap:wrap;gap:6px 12px;margin:2px 0 4px;font-size:11px;color:#9a9aa2}
+  #insp .conns span{white-space:nowrap}
+  #insp .ifile{margin-top:22px;padding-top:10px;border-top:1px solid #1c1c1f;text-align:right;
+    font-family:ui-monospace,monospace;font-size:10.5px;color:#8a8a90;word-break:break-all}
+  #insp .ifile a{color:#8fc7f0;text-decoration:none}
   nav a#flushbtn{color:#a86b6b;margin-top:8px}nav a#flushbtn:hover{color:#e08a8a}
   #gsearch{width:calc(100% - 24px);margin:0 12px 12px;background:#101012;border:1px solid #23232a;
     color:#e6e6e8;border-radius:8px;padding:7px 10px;font:11px/1.4 inherit}
@@ -455,7 +460,7 @@ async function renderCode(){
   catch(e){ view.innerHTML='<span class="hint">code graph API failed: '+esc(e.message)+'</span>'; return; }
   const syms = g.nodes.filter(n=>n.kind!=='file');           // symbols carry the signal
   hdr.textContent = syms.length+' symbols · '+g.edges.length+' edges · click a node for its dossier';
-  if(!syms.length){ view.innerHTML='<span class="hint">no code graph yet — run <code>omni-memory map</code> (or just wait; it auto-builds).</span>'; return; }
+  if(!syms.length){ view.innerHTML='<span class="hint">no code graph yet.<br>• Build it: <code>omni-memory build</code> (or <code>omni-memory map</code>).<br>• For <b>non-Python</b> repos (JS/TS/Go/…) the deep graph needs tree-sitter — check <code>omni-memory doctor</code>; if it says “tree-sitter: absent”, install on Python ≥3.10: <code>pip install -U omni-memory-agent</code>.</span>'; return; }
   view.innerHTML = '<svg id="cg"></svg>';
   const ids = new Set(g.nodes.map(n=>n.id));
   const nodes = g.nodes.map(d=>({...d}));
@@ -484,7 +489,18 @@ async function renderCode(){
   node.append('title').text(d=>(d.signature?d.name+d.signature:d.name)+'  ·  '+d.file);
   node.append('text').attr('x',d=>rOf(d)+5).attr('y',3).text(d=>short(d.name))
     .attr('fill','#83848a').style('pointer-events','none');
+  // hover: spotlight a node + everything it connects to (calls/callers/contains),
+  // fade the rest — same affordance as the Memory Graph, so you can read the
+  // wiring at a glance. Colour edges by relation so calls vs inheritance read.
+  const adj={}; links.forEach(l=>{const a=l.source.id||l.source,b=l.target.id||l.target;
+    (adj[a]=adj[a]||new Set()).add(b); (adj[b]=adj[b]||new Set()).add(a);});
   let selected=null;
+  node.on('mouseenter',(e,d)=>{ const keep=new Set(adj[d.id]||[]); keep.add(d.id);
+      node.style('opacity',n=>keep.has(n.id)?1:.10);
+      link.style('stroke-opacity',l=>((l.source.id||l.source)===d.id||(l.target.id||l.target)===d.id)?.95:.05)
+          .attr('stroke-width',l=>((l.source.id||l.source)===d.id||(l.target.id||l.target)===d.id)?2:(l.rel==='calls'?1.3:.9)); })
+    .on('mouseleave',()=>{ node.style('opacity',1);
+      link.style('stroke-opacity',1).attr('stroke-width',l=>l.rel==='calls'?1.3:.9); });
   node.on('click',(e,d)=>{ selected=d.id; openInspector(d.id);
     node.select('circle').attr('stroke',n=>n.id===d.id?'#f0f0f2':'#0b0b0c').attr('stroke-width',n=>n.id===d.id?2.5:1.5); });
   sim.on('tick',()=>{ link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
@@ -598,14 +614,22 @@ async function openInspector(id){
     </div>
     <div class="ibody">
       ${d.signature?`<div class="sig">${esc(d.name)}${esc(d.signature)}</div>`:''}
-      ${d.doc?`<div class="doc">${esc(d.doc)}</div>`:''}
+      <div class="conns">
+        <span title="calls downstream">↓ ${(d.calls_out||[]).length} calls</span>
+        <span title="called by (upstream)">↑ ${(d.called_by||[]).length} callers</span>
+        ${(d.emits||[]).length?`<span title="events/messages published" style="color:#e6cf8a">⚡ ${(d.emits||[]).length} emits</span>`:''}
+        ${(d.raises||[]).length?`<span title="exceptions raised" style="color:#f0a5a5">✕ ${(d.raises||[]).length} raises</span>`:''}
+        ${(d.contains||[]).length?`<span title="members contained">◇ ${(d.contains||[]).length} members</span>`:''}
+      </div>
+      ${d.doc?`<div class="sec">What it does</div><div class="doc">${esc(d.doc)}</div>`:''}
       ${pills('Raises', d.raises, 'pill-raise')}
-      ${pills('Emits / publishes', d.emits, 'pill-emit')}
+      ${pills('Emits / publishes (events · Kafka · side-effects)', d.emits, 'pill-emit')}
       ${sect('Calls downstream →', d.calls_out, refRow, 'nothing resolved in-repo')}
       ${sect('Called by ←', d.called_by, refRow, 'no in-repo callers')}
       ${d.inherits&&d.inherits.length?sect('Inherits', d.inherits, refRow, ''):''}
       ${d.contains&&d.contains.length?sect('Contains', d.contains, refRow, ''):''}
       ${d.calls&&d.calls.length?`<div class="sec">All calls (incl. external)</div><div>${d.calls.map(x=>`<span class="pill pill-call">${esc(x)}</span>`).join('')}</div>`:''}
+      <div class="ifile">${fileLink(d.file, d.line_start)||esc(d.file)}${d.line_end&&d.line_end!==d.line_start?'–'+d.line_end:''}</div>
     </div>`;
   insp.querySelector('.iclose').onclick = closeInspector;
   insp.querySelectorAll('[data-goto]').forEach(el=>el.onclick=()=>openInspector(el.dataset.goto));

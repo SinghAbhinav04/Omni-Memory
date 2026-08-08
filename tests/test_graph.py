@@ -51,6 +51,26 @@ def test_build_resolves_calls_and_inheritance(store, repo):
     assert by_id  # sanity
 
 
+def test_empty_extract_keeps_previous_graph(store, repo):
+    codegraph.build_code_graph(store, repo)
+    assert store.has_code_graph()
+    n = len(store.code_graph()[0])
+    (repo / "svc.py").unlink()                     # nothing parseable left
+    extract._EXTRACT_CACHE.clear()
+    r = codegraph.build_code_graph(store, repo)
+    assert r.get("kept_previous")                  # did NOT wipe
+    assert len(store.code_graph()[0]) == n         # previous graph intact
+
+
+def test_build_command_builds_code_graph(repo, monkeypatch):
+    import types
+    import omni_memory.cli as cli
+    monkeypatch.chdir(repo)
+    cli.cmd_build(types.SimpleNamespace(no_ai=True, no_docs=True))
+    from omni_memory.store import Store
+    assert len(Store(repo).code_graph()[0]) > 0    # first build populates it
+
+
 def test_symbol_dossier(store, repo):
     codegraph.build_code_graph(store, repo)
     co_id = next(n["id"] for n in store.code_graph()[0] if n["name"] == "create_order")
