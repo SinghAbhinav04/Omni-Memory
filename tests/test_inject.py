@@ -51,6 +51,17 @@ def test_global_memory_injects_into_project(store, repo):
     assert "FastAPI" in block                            # alongside project memory
 
 
+def test_shared_memory_marked_external(store, repo):
+    # imported/shared memories must be tagged (not trusted as this project's truth)
+    store.import_memories(
+        {"memories": [{"id": "sh1", "kind": "decision",
+                       "text": "shared claim from the repo", "branch": "main"}]},
+        source="shared")
+    block = inject.build_block(store, repo, query="")
+    assert "↗external" in block
+    assert "verify before trusting" in block
+
+
 def test_rules_are_compact(store, repo):
     # the enforcement rules ride every message → keep them short
     assert len(inject.ENFORCE_RULES) < 220

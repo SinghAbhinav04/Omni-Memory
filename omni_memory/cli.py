@@ -402,21 +402,32 @@ def cmd_hook(args):
         return 0
 
 
+_SHARED_MAX_BYTES = 2_000_000
+
+
 def _bootstrap_shared(s, root):
     """Fresh clone with committed memory: auto-load `omni-memory.json` the first
     time (store still empty) so a teammate/other machine starts already-remembered
-    without running `import`. Idempotent — skips once the store has memories."""
+    without running `import`. Idempotent — skips once the store has memories.
+
+    Security: the file is repo-controlled, so imported memories are tagged
+    source="shared" (rendered ↗external, NOT trusted as this project's own truth),
+    size-capped, and the whole behavior is gated by the `auto_import_shared` meta
+    flag (set it false to require an explicit `omni-memory import`)."""
     try:
+        if not s.get_meta("auto_import_shared", True):
+            return
         if s.counts().get("active", 0) > 0:
             return
         shared = root / "omni-memory.json"
-        if not shared.exists():
+        if not shared.exists() or shared.stat().st_size > _SHARED_MAX_BYTES:
             return
         n = s.import_memories(json.loads(shared.read_text()), source="shared")
         if n:
             digest.write_digest(s)
-            print(f"omni-memory: bootstrapped {n} shared memories from "
-                  "omni-memory.json", file=sys.stderr)
+            print(f"omni-memory: loaded {n} shared memories from omni-memory.json "
+                  "(marked ↗external — verify before trusting). Disable: set "
+                  "auto_import_shared=false.", file=sys.stderr)
     except Exception:  # noqa: BLE001
         pass
 

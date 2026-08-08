@@ -61,5 +61,6 @@ def write_digest(store: Store) -> Path:
         lines.append("")
     text = "\n".join(lines)
     out = store.dir / DIGEST_NAME
-    out.write_text(text)
+    from .store import atomic_write            # atomic: capture + watcher can race
+    atomic_write(out, text)
     return out

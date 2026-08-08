@@ -66,11 +66,13 @@ def build_block(store: Store, root: Path, query: str = "",
         widened = True      # not a full 20-item dump on an unrelated prompt
         mems = store.memories(branch=branch, base=base, limit=widen)
     # layer in a few cross-project (global) memories from ~/.omni-memory so the
-    # user's standing knowledge/preferences travel into every project.
+    # user's standing knowledge/preferences travel into every project. Only if a
+    # global store already exists — don't materialize one just by injecting.
     gitems = int(store.get_meta("inject_global_items", 3))
-    if gitems > 0:
+    from .store import global_dir
+    if gitems > 0 and (global_dir() / "omni.db").exists():
         try:
-            from .store import Store as _Store, global_dir
+            from .store import Store as _Store
             gs = _Store(exact_dir=global_dir())
             seen = {m["id"] for m in mems}
             for gm in gs.memories(query=query, limit=gitems):
@@ -89,11 +91,21 @@ def build_block(store: Store, root: Path, query: str = "",
         ENFORCE_RULES,
         "",
     ]
-    used, budget = 0, char_budget
+    used, budget, has_external = 0, char_budget, False
     for m in mems:
         tag = f"[{m['id']}]"
         where = (" · " + ", ".join(m["files"][:2])) if m["files"] else ""
-        br = " 🌐global" if m.get("_global") else ("" if cur != "*" else f" ({m['branch']})")
+        # provenance: global / externally-sourced (imported or a committed shared
+        # file) memories are NOT this project's own capture — mark them so the
+        # agent weights them accordingly instead of trusting them as ground truth.
+        if m.get("_global"):
+            br = " 🌐global"
+            has_external = True
+        elif m.get("source") in ("shared", "imported"):
+            br = " ↗external"
+            has_external = True
+        else:
+            br = "" if cur != "*" else f" ({m['branch']})"
         stale = " ⚠STALE" if m.get("stale") else ""
         text = m["text"] if len(m["text"]) <= _TEXT_CAP else m["text"][:_TEXT_CAP - 1] + "…"
         line = f"{tag} {m['kind']}{br}{stale}: {text}{where}"
@@ -102,6 +114,10 @@ def build_block(store: Store, root: Path, query: str = "",
         lines.append(line)
         budget -= len(line)
         used += 1
+    if has_external:
+        lines.insert(3, "Note: ↗external / 🌐global items came from outside this "
+                        "project's own capture (imported/shared/global) — verify "
+                        "before trusting them as this project's truth.")
     lines[1] = lines[1].replace("scope:", f"scope: {used} item(s) ·", 1)
     lines.append("=== END MEMORY — cite [id]s you used ===")
     return "\n".join(lines)

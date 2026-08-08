@@ -91,5 +91,6 @@ def write(store: Store, root: Path) -> Path:
     else:
         new = (f"# AGENTS.md\n\n_Standing instructions for AI coding agents in "
                f"this repo._\n\n{block}\n")
-    path.write_text(new)
+    from .store import atomic_write            # atomic: several processes write this
+    atomic_write(path, new)
     return path

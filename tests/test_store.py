@@ -122,6 +122,28 @@ def test_committed_memory_bootstraps_on_fresh_clone(store, repo):
     assert len(store.memories(status="active")) == 1
 
 
+def test_atomic_write_concurrent(tmp_path):
+    import threading
+    from omni_memory.store import atomic_write
+    f = tmp_path / "AGENTS.md"
+    errs = []
+
+    def w(n):
+        for _ in range(40):
+            try:
+                atomic_write(f, f"content-{n}-" + "x" * 500)
+            except Exception as e:  # noqa: BLE001
+                errs.append(e)
+
+    ts = [threading.Thread(target=w, args=(i,)) for i in range(5)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert not errs                                   # no races within one process
+    txt = f.read_text()
+    assert txt.startswith("content-") and txt.endswith("x" * 20)  # never half-written
+    assert not [p for p in tmp_path.iterdir() if ".tmp." in p.name]  # no leftovers
+
+
 def test_self_ignore_written(store, repo):
     # opening the store (the `store` fixture) creates .omni-memory/.gitignore = *
     assert (repo / ".omni-memory" / ".gitignore").read_text().strip() == "*"

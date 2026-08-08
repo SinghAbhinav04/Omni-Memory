@@ -5,6 +5,7 @@ Everything lives under `<project>/.omni-memory/omni.db`. Local-first, no cloud.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -100,16 +101,23 @@ CREATE INDEX IF NOT EXISTS idx_cnode_name ON code_nodes(name);
 
 
 def global_dir() -> Path:
-    """The user-level store, shared across every project (~/.omni-memory)."""
-    d = Path.home() / STORE_DIRNAME
-    d.mkdir(exist_ok=True)
-    gi = d / ".gitignore"
-    if not gi.exists():
-        try:
-            gi.write_text("*\n")
-        except Exception:  # noqa: BLE001
-            pass
-    return d
+    """Path of the user-level store shared across every project (~/.omni-memory).
+    Side-effect-free: it does NOT create the dir, so callers (e.g. injection) can
+    cheaply check whether a global store exists without materializing one for
+    users who never opt in. `Store(exact_dir=…)` creates it on first write."""
+    return Path.home() / STORE_DIRNAME
+
+
+def atomic_write(path: Path, text: str) -> None:
+    """Write a file atomically (temp + os.replace) so a reader — or a second
+    concurrent writer — never sees a half-written file. Used for the context
+    artifacts (AGENTS.md / MEMORY.md) that IDEs read live and that several
+    processes (watcher, hooks, dashboard) can regenerate at once."""
+    # unique per call (pid + uuid): two threads in ONE process (e.g. the dashboard
+    # watcher + a request handler) must not share a temp path and race on replace.
+    tmp = path.parent / f".{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    tmp.write_text(text)
+    os.replace(tmp, path)
 
 
 class Store:
