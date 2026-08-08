@@ -4,7 +4,7 @@
 git-anchored, fully local. Your AI stops forgetting between chats and stops
 hallucinating architecture it never verified.
 
-> Plugs into **Claude Code** and **Antigravity** (more IDEs coming). Toggle with
+> Works with **Claude Code**, **OpenCode**, **Antigravity**, **Cursor** & **Windsurf** (any AGENTS.md-aware IDE). Toggle with
 > `/omni-memory`. Browse everything in a minimalist local dashboard.
 
 ## Install

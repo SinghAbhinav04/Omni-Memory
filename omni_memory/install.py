@@ -34,12 +34,18 @@ def _hooks_block() -> dict:
     }
 
 
+# IDEs that read the repo-root AGENTS.md as project context. For these the
+# canonical file IS the integration — no bespoke hook system to wire.
+_AGENTS_IDES = ("opencode", "antigravity", "cursor", "windsurf")
+
+
 def install(platform: str = "claude-code") -> int:
     if platform == "claude-code":
         return _install_claude_code()
-    if platform == "antigravity":
-        return _install_antigravity()
-    print(f"Unknown platform '{platform}'. Try: claude-code | antigravity")
+    if platform in _AGENTS_IDES:
+        return _install_agents_ide(platform)
+    print(f"Unknown platform '{platform}'. "
+          f"Try: claude-code | {' | '.join(_AGENTS_IDES)}")
     return 1
 
 
@@ -48,8 +54,15 @@ def detect_ide(root: Path) -> str:
     Falls back to 'claude-code' (the richest integration) when unsure."""
     if (root / ".claude").exists() or (root / "CLAUDE.md").exists():
         return "claude-code"
+    if (root / ".opencode").exists() or (root / "opencode.json").exists() \
+            or (root / "opencode.jsonc").exists():
+        return "opencode"
     if (root / ".antigravity").exists() or (root / ".gemini").exists():
         return "antigravity"
+    if (root / ".cursor").exists():
+        return "cursor"
+    if (root / ".windsurf").exists() or (root / ".windsurfrules").exists():
+        return "windsurf"
     return "claude-code"
 
 
@@ -115,15 +128,23 @@ def _write_agents_md(proj: Path) -> None:
         print(f"[!] couldn't write AGENTS.md ({e})")
 
 
-def _install_antigravity() -> int:
-    """Antigravity reads AGENTS.md at the repo root as project context, so the
-    canonical file is the portable integration. (MCP server is the richer P1
-    path; the file works today with zero config.)"""
+def _install_agents_ide(ide: str) -> int:
+    """Wire an AGENTS.md-reading IDE (OpenCode, Antigravity, Cursor, Windsurf).
+    These have no Claude-Code-style hook system, so the integration is the
+    canonical AGENTS.md (which they load as project context) plus the agent
+    driving the `omni-memory` CLI in-session. We write/refresh the file and
+    print exactly what to do next."""
     proj = find_project_root()
     _write_agents_md(proj)
-    print("[+] Antigravity picks up AGENTS.md automatically as project context.")
-    print("    Keep it fresh with either:")
-    print("      • `omni-memory ui` running (the watcher refreshes AGENTS.md live), or")
-    print("      • `omni-memory hook start` at session start (or any capture/build).")
-    print("    Optional headless capture: set OMNI_AGENT_CMD to Antigravity's CLI.")
+    label = {"opencode": "OpenCode", "antigravity": "Antigravity",
+             "cursor": "Cursor", "windsurf": "Windsurf"}.get(ide, ide)
+    print(f"[+] {label} reads AGENTS.md at the repo root as project context —")
+    print("    it picks up your memory automatically on the next session.")
+    print("    In-session, the agent uses the CLI for the ranked / fresh memory:")
+    print("      • start of a task → `omni-memory inject \"<the request>\"` (or `recall`)")
+    print("      • learned something durable → `omni-memory remember \"…\" --kind <kind>`")
+    print("      • end of a task → `omni-memory prompt session` → `omni-memory capture`")
+    print("    Keep AGENTS.md fresh: run `omni-memory ui` (live), or `omni-memory")
+    print("    build` / `omni-memory hook start`. (Automatic per-prompt hooks are")
+    print("    Claude-Code-only today — here it's AGENTS.md + the CLI, agent-driven.)")
     return 0

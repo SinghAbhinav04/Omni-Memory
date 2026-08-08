@@ -88,6 +88,16 @@ def test_pipeline_survives_ascii_locale(store, repo):
     assert "OK" in res.stdout
 
 
+def test_opencode_bind_writes_agents_md(store, repo, monkeypatch):
+    from omni_memory import install
+    monkeypatch.chdir(repo)
+    (repo / "opencode.json").write_text("{}\n", encoding="utf-8")
+    assert install.detect_ide(repo) == "opencode"      # auto-detected
+    assert install.bind("opencode") == 0
+    txt = (repo / "AGENTS.md").read_text(encoding="utf-8")
+    assert "OMNI-MEMORY:START" in txt                   # context written for OpenCode
+
+
 def test_agents_md_managed_block(store, repo):
     store.add_memory(Memory(text="Auth uses JWT in an httpOnly cookie",
                             kind="decision", branch="main"))

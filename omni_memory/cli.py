@@ -673,7 +673,8 @@ def main(argv=None):
     ins = sub.add_parser("install"); ins.add_argument("--platform", default="claude-code")
     bn = sub.add_parser("bind")
     bn.add_argument("ide", nargs="?", default="auto",
-                    choices=["auto", "claude-code", "antigravity"],
+                    choices=["auto", "claude-code", "opencode", "antigravity",
+                             "cursor", "windsurf"],
                     help="which IDE to bind (default: auto-detect)")
     sub.add_parser("doctor")
     ug = sub.add_parser("usage")

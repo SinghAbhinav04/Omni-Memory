@@ -28,7 +28,7 @@ omni-memory used <id> …       # cite memories you relied on (improves ranking)
 omni-memory gc [--dry-run]    # quarantine dead/false memory (abandoned branches, stale)
 omni-memory restore <id|branch>  # un-quarantine
 omni-memory flush [--scope all|memory|graph] [-y]  # wipe store to rebuild from scratch
-omni-memory bind [claude-code|antigravity]  # one-command onboarding (auto-detects IDE)
+omni-memory bind [claude-code|opencode|antigravity|cursor|windsurf]  # onboarding (auto-detects)
 omni-memory doctor            # diagnose setup (git, store, graph, hooks, AGENTS.md, AI)
 omni-memory usage [--max-items N] [--budget CHARS]  # token footprint + tune injection
 omni-memory export [file] [--global]   # portable JSON snapshot (commit to share)
