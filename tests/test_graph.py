@@ -71,6 +71,31 @@ def test_build_command_builds_code_graph(repo, monkeypatch):
     assert len(Store(repo).code_graph()[0]) > 0    # first build populates it
 
 
+def test_only_project_source_graphed(tmp_path):
+    """Build output, dependencies, and minified bundles must be excluded — only
+    the developer's own (git-tracked, non-ignored) source is graphed."""
+    import subprocess
+    d = tmp_path / "proj"
+    d.mkdir()
+    subprocess.run(["git", "-C", str(d), "init", "-q"], check=True)
+    (d / "app.py").write_text("def handler():\n    return svc()\ndef svc():\n    return 1\n")
+    (d / ".gitignore").write_text(".omni-memory/\n.next/\nnode_modules/\n")
+    (d / ".next").mkdir(); (d / ".next" / "chunk.js").write_text("function asyncModule(){}\n")
+    (d / "node_modules").mkdir(); (d / "node_modules" / "l.js").write_text("function vendored(){}\n")
+    (d / "b.min.js").write_text("function a(){}" * 500 + "\n")
+    subprocess.run(["git", "-C", str(d), "add", "app.py", ".gitignore", "b.min.js"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "i"], check=True, capture_output=True)
+    extract._EXTRACT_CACHE.clear()
+    fx = extract.extract_repo(d)
+    names = {s["name"] for s in fx["symbols"] if s["kind"] in ("function", "method", "class")}
+    assert {"handler", "svc"} <= names             # real source in
+    assert "asyncModule" not in names              # .next build output out
+    assert "vendored" not in names                 # node_modules out
+    assert "a" not in names                         # minified bundle out
+
+
 def test_symbol_dossier(store, repo):
     codegraph.build_code_graph(store, repo)
     co_id = next(n["id"] for n in store.code_graph()[0] if n["name"] == "create_order")

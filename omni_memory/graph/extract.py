@@ -20,7 +20,6 @@ Symbol id scheme:  "<relpath>"            for a file
                    "<relpath>::<qualname>"  for a symbol  (e.g. "a/b.py::A.m")
 """
 from __future__ import annotations
-
 import ast
 from pathlib import Path
 from typing import Optional
@@ -61,18 +60,29 @@ _TS_SPEC = {
 }
 _TS_SPEC["tsx"] = _TS_SPEC["typescript"]
 
-_SKIP_DIRS = {"node_modules", ".git", ".omni-memory", "dist", "build",
+# Directories that are never the project's own source — dependencies, build
+# output, framework caches, generated bundles. Only used for the non-git
+# fallback; inside a git repo we enumerate tracked files instead (below), which
+# excludes everything .gitignore'd automatically.
+_SKIP_DIRS = {"node_modules", ".git", ".omni-memory", "dist", "build", "out",
               "__pycache__", ".venv", "venv", "env", "target", ".tox",
-              ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+              ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vscode",
+              ".next", ".nuxt", ".svelte-kit", ".output", ".turbo", ".parcel-cache",
+              ".cache", ".angular", ".vercel", ".netlify", "coverage",
+              "vendor", "bower_components", "third_party", "generated", ".gradle"}
+# Filenames that are generated/minified bundles, not hand-written source.
+_SKIP_SUFFIXES = (".min.js", ".bundle.js", ".min.css", ".chunk.js", ".map",
+                  ".generated.ts", ".g.dart")
 _MAX_BYTES = 1_500_000
+_MAX_LINE = 5000                # a line longer than this ⇒ minified/generated
 
 
 def available() -> bool:
     """True if the tree-sitter multi-language backend is installed."""
     try:
-        import tree_sitter_language_pack  # noqa: F401
+        import tree_sitter_language_pack
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -94,16 +104,25 @@ def is_emit(name: str) -> bool:
     return any(h in n for h in _EMIT_HINTS)
 
 
+def _is_generated_name(path: Path) -> bool:
+    n = path.name.lower()
+    return any(n.endswith(s) for s in _SKIP_SUFFIXES)
+
+
 def extract_file(path: Path, root: Path) -> Optional[dict]:
-    """Extract one file's code graph, or None if it isn't a supported language."""
+    """Extract one file's code graph, or None if it isn't hand-written source in a
+    supported language (skips minified/generated bundles)."""
     lang = LANGUAGES.get(path.suffix.lower())
-    if not lang:
+    if not lang or _is_generated_name(path):
         return None
     try:
         if path.stat().st_size > _MAX_BYTES:
             return None
         src = path.read_text(errors="ignore")
     except Exception:  # noqa: BLE001
+        return None
+    # minified/generated files pack everything onto a few enormous lines
+    if src and max((len(ln) for ln in src.splitlines()), default=0) > _MAX_LINE:
         return None
     rel = str(path.relative_to(root))
     if available() and lang in _TS_SPEC:
@@ -124,8 +143,28 @@ def extract_file(path: Path, root: Path) -> Optional[dict]:
 _EXTRACT_CACHE: dict = {}
 
 
+def _source_files(root: Path) -> list:
+    """The project's OWN source files. Inside a git repo we ask git for tracked +
+    new (non-ignored) files — so dependencies and build output (node_modules,
+    .next, dist, vendored libs, …) are excluded exactly as .gitignore says, and
+    we graph the code the developer actually wrote. Falls back to a filtered walk
+    outside git."""
+    try:
+        from .. import gitmeta
+        if gitmeta.is_repo(root):
+            out = gitmeta._git(root, "ls-files", "--cached", "--others",
+                               "--exclude-standard", "-z")
+            if out:
+                return [root / p for p in out.split("\0") if p]
+    except Exception:  # noqa: BLE001
+        pass
+    return [p for p in root.rglob("*")
+            if p.is_file() and not (_SKIP_DIRS & set(p.parts))]
+
+
 def extract_repo(root: Path, max_files: int = 5000, incremental: bool = True) -> dict:
-    """Walk the repo and merge every file's extract into one graph payload.
+    """Merge every source file's extract into one graph payload — the project's
+    own code only (git-tracked), never dependencies or build output.
 
     With `incremental` (default), unchanged files are served from the parse cache
     so only edited files are re-parsed — the watcher stays cheap on big repos."""
@@ -134,7 +173,7 @@ def extract_repo(root: Path, max_files: int = 5000, incremental: bool = True) ->
            "files_parsed": 0, "reparsed": 0}
     n = 0
     seen: set = set()
-    for p in sorted(root.rglob("*")):
+    for p in sorted(_source_files(root)):
         if n >= max_files:
             break
         if not p.is_file() or _SKIP_DIRS & set(p.parts):
