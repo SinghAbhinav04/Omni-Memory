@@ -9,29 +9,47 @@ hallucinating architecture it never verified.
 
 ## Install
 
-**Option A — Claude Code plugin (no pip needed).** The zero-dependency engine
-rides along inside the plugin, so this is all it takes:
+**pip** (recommended — gives you the `omni-memory` CLI):
+```bash
+pip install omni-memory-agent
+```
 
+**Claude Code plugin** (session hooks + skill, no pip needed for injection):
 ```
 /plugin marketplace add SinghAbhinav04/Omni-Memory
 /plugin install omni-memory@singhabhinav
 ```
 
-That wires the skill + the capture/inject hooks automatically. Just work — memory
-injects on every prompt and updates itself when a session ends.
+The core is **zero-dependency** (Python stdlib + SQLite) and runs with **no API key**.
+On Python ≥3.10 it auto-installs tree-sitter for the multi-language code graph; on 3.9
+it still works and graphs Python via `ast`.
 
-**Option B — pip (gives you the `omni-memory` CLI everywhere).**
+## Quick start — two steps people mix up
+
+They do **different** things:
+
+| Command | What it does |
+|---|---|
+| **`omni-memory build`** | **Reads your repo and creates the content** — captures decisions/flows/gotchas, builds the code graph, and writes the docs (`MEMORY.md`, `api-map.md`, `linkup.md`). |
+| **`omni-memory bind`** | **Connects it to your IDE** — installs the session hooks and writes the cross-IDE `AGENTS.md`. It does **not** create memory or docs. |
+
+First run, in order:
 
 ```bash
-pip install omni-memory-agent      # or, from a clone: python -m pip install -e .
-omni-memory install                # wire it into Claude Code (the CLI is `omni-memory`)
-omni-memory build                  # one-time: seed memory from the repo (optional)
-omni-memory status
+pip install omni-memory-agent
+
+omni-memory build      # 1. build memory + DOCS from your repo   ← the content
+omni-memory bind       # 2. wire it into your IDE (hooks + AGENTS.md)
+omni-memory ui         # 3. browse memory, docs, and the code graph
+omni-memory doctor     # anytime: verify the setup is healthy
 ```
 
-The core is **zero-dependency** (Python stdlib + SQLite) and runs with **no API
-key**. Set `GEMINI_API_KEY` (or Anthropic/OpenAI) only if you want the AI-written
-build pass and artifacts.
+> **About `build`:** it reads your codebase with an agent/LLM. Run it **inside an AI IDE**
+> (so the agent does the analysis) or set a model key (`omni-memory key gemini`). Without
+> either, it still builds the **code graph + heuristic docs** — just no AI-written facts.
+
+After that it's automatic: memory injects into every prompt and captures itself when a
+session ends.
 
 ## What it does
 - **Remembers** decisions, facts, request/data flows, gotchas — automatically at
@@ -59,23 +77,32 @@ build pass and artifacts.
 
 ## Commands
 ```
+# setup
+omni-memory build            # build memory + DOCS from the repo (MEMORY.md, api-map, linkup)
+omni-memory bind [ide]       # wire an IDE: session hooks + AGENTS.md (auto-detects)
+omni-memory ui               # dashboard: overview · memory · docs · code & repo graph
+omni-memory doctor           # diagnose setup (git, store, graph, hooks, AGENTS.md, AI)
 omni-memory status | on | off | branch-aware
-omni-memory build          # one-time: AI-written facts from the repo + docs
-omni-memory ui             # local dashboard (graph + memory docs + repo graph)
-omni-memory map            # (re)build the knowledge graph + tree-sitter code graph
-omni-memory check          # re-anchor vs git; flag stale memories (symbol-level)
-omni-memory recall <q>     # query memory instead of grepping
-omni-memory branches       # git topology + per-branch memory
-omni-memory remember "…" [--kind decision|fact|flow|gotcha|todo|…]
-omni-memory forget <id>
-omni-memory used <id> …    # record a citation (feeds the ranker)
-omni-memory gc [--dry-run] [--purge]   # quarantine dead/false memory; purge is human-gated
-omni-memory restore <id|branch>        # un-quarantine
-omni-memory digest         # (re)write the MEMORY.md knowledge base
-omni-memory artifact [apimap|linkup|all]   # AI-written cross-reference docs
-omni-memory key <gemini|anthropic|openai>  # store a model key securely (chmod 600)
-omni-memory install [--platform claude-code|antigravity]
+
+# using memory
+omni-memory recall <q>                       # search memory instead of grepping
+omni-memory remember "…" [--kind …] [--global]   # add one by hand (--global = every project)
+omni-memory forget <id> · used <id>… · restore <id|branch>
+omni-memory branches                         # git topology + per-branch memory
+
+# keeping it fresh
+omni-memory map              # (re)build the knowledge + tree-sitter code graph
+omni-memory check            # re-anchor vs git; flag ⚠ stale memories (symbol-level)
+omni-memory gc [--dry-run] [--purge]         # quarantine dead/false memory
+omni-memory usage [--max-items N] [--budget C]   # per-prompt token footprint + tune
+
+# sharing / reset
+omni-memory export [file] [--global]         # portable snapshot (commit it to share)
+omni-memory import [file] [--global]         # load an export (idempotent, ids preserved)
+omni-memory flush [--scope all|memory|graph] [-y]    # wipe to rebuild from scratch
+omni-memory key <gemini|anthropic|openai>    # store a model key for the AI build pass
 ```
+`bind` is the friendly setup command; `install [--platform …]` is the explicit form.
 
 ## How it works
 ```
