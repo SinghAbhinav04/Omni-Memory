@@ -24,7 +24,8 @@ _CODE_EXT = (".py", ".ts", ".js", ".java", ".go", ".rb", ".kt", ".rs", ".md",
 def _tracked_files(root: Path) -> list[str]:
     try:
         r = subprocess.run(["git", "-C", str(root), "ls-files"],
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, timeout=20,
+                           encoding="utf-8", errors="replace")
         if r.returncode == 0:
             return [f for f in r.stdout.splitlines() if f]
     except Exception:  # noqa: BLE001
@@ -59,7 +60,7 @@ def gather(root: Path, max_chars: int = 140_000, per_file: int = 6_000) -> str:
         if not f.lower().endswith(_CODE_EXT):
             continue
         try:
-            text = (root / f).read_text(errors="ignore")[:per_file]
+            text = (root / f).read_text(encoding="utf-8", errors="ignore")[:per_file]
         except Exception:  # noqa: BLE001
             continue
         chunk = f"\n\n# FILE: {f}\n{text}"

@@ -62,6 +62,32 @@ def test_hook_never_raises(store, repo, monkeypatch):
     assert cli.cmd_hook(Args()) == 0
 
 
+def test_pipeline_survives_ascii_locale(store, repo):
+    """Windows defaults to cp1252 and crashes on Unicode I/O ('charmap codec').
+    Simulate with LC_ALL=C: the full pipeline (git subprocess, code graph read,
+    AGENTS.md/MEMORY.md write) must run without a decode/encode error even with a
+    Unicode-heavy memory."""
+    import os
+    import subprocess
+    import sys
+    from omni_memory.store import Memory
+    store.add_memory(Memory(text="flow: publish order.created → Kafka · café ⚠ 🌐",
+                            kind="flow", branch="main"))
+    code = (
+        "from omni_memory import branch\n"
+        "from omni_memory.store import Store\n"
+        f"r = r'''{repo}'''\n"
+        "branch.full_refresh(Store(r), r)\n"
+        "print('OK')\n"
+    )
+    env = dict(os.environ, LC_ALL="C", LANG="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0",
+               PYTHONPATH=os.pathsep.join(sys.path))
+    res = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                         text=True, env=env)
+    assert res.returncode == 0, res.stderr
+    assert "OK" in res.stdout
+
+
 def test_agents_md_managed_block(store, repo):
     store.add_memory(Memory(text="Auth uses JWT in an httpOnly cookie",
                             kind="decision", branch="main"))

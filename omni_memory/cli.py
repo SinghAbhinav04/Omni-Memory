@@ -76,6 +76,11 @@ def cmd_remember(args):
 def cmd_capture(args):
     """Ingest the agent's extraction JSON (stdin) → memories."""
     s, root = _store()
+    if hasattr(sys.stdin, "reconfigure"):
+        try:
+            sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     raw = sys.stdin.read()
     n = sm.capture_from_json(s, root, raw, source="session")
     digest.write_digest(s)
@@ -107,7 +112,7 @@ def cmd_build(args):
     except Exception as e:  # noqa: BLE001
         print(f"[!] code graph skipped ({e})")
     g = graphbuild.build_graph(s, root)
-    (s.dir / "graph.json").write_text(json.dumps(g, indent=2))
+    (s.dir / "graph.json").write_text(json.dumps(g, indent=2), encoding="utf-8")
 
     ai_added = 0
     use_ai = llm.available() and not args.no_ai
@@ -252,7 +257,7 @@ def cmd_map(args):
     branchmod.sync_git(s, root)
     g = graphbuild.build_graph(s, root)
     out = s.dir / "graph.json"
-    out.write_text(json.dumps(g, indent=2))
+    out.write_text(json.dumps(g, indent=2), encoding="utf-8")
     print(f"[+] memory graph: {len(g['nodes'])} nodes, {len(g['edges'])} edges → {out}")
 
     from .graph import build as codegraph, extract
@@ -273,7 +278,7 @@ def _read_transcript(path):
     if not path or not Path(path).exists():
         return ""
     out = []
-    for line in Path(path).read_text(errors="ignore").splitlines():
+    for line in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
         try:
             obj = json.loads(line)
         except Exception:  # noqa: BLE001
@@ -334,7 +339,7 @@ def cmd_export(args):
     s, root = _open_store(args.glob)
     data = s.export_memories()
     out = Path(args.file) if args.file else (find_project_root() / "omni-memory.json")
-    out.write_text(json.dumps(data, indent=2))
+    out.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"[+] exported {len(data['memories'])} memories → {out}")
     if not args.file:
         print("    tip: commit omni-memory.json to share memory across clones/IDEs.")
@@ -350,7 +355,7 @@ def cmd_import(args):
         print(f"no export file at {src}  (run `omni-memory export` first, or pass a path).")
         return 1
     try:
-        data = json.loads(src.read_text())
+        data = json.loads(src.read_text(encoding="utf-8"))
     except Exception as e:  # noqa: BLE001
         print(f"[!] couldn't read export: {e}")
         return 1
@@ -384,7 +389,7 @@ def cmd_usage(args):
     ag_block = ""
     if ag.exists():
         from . import agentsmd
-        t = ag.read_text(errors="ignore")
+        t = ag.read_text(encoding="utf-8", errors="ignore")
         ag_block = (t.split(agentsmd.START, 1)[1].split(agentsmd.END, 1)[0]
                     if agentsmd.START in t and agentsmd.END in t else t)
     mem_md = s.dir / "MEMORY.md"
@@ -395,7 +400,7 @@ def cmd_usage(args):
     print(f"  session-start seed   : ~{toks(block):>4} tok   · once per session")
     print(f"  AGENTS.md standing   : ~{toks(ag_block):>4} tok   · loaded by Antigravity/Cursor each session")
     if mem_md.exists():
-        print(f"  MEMORY.md (@-ref)    : ~{toks(mem_md.read_text(errors='ignore')):>4} tok   · only if you @-reference it")
+        print(f"  MEMORY.md (@-ref)    : ~{toks(mem_md.read_text(encoding='utf-8', errors='ignore')):>4} tok   · only if you @-reference it")
     print(f"\n  settings: max_items={mi}  char_budget={cb}")
     print("  lower it: omni-memory usage --max-items 6 --budget 1000")
     return 0
@@ -431,7 +436,7 @@ def _bootstrap_shared(s, root):
         shared = root / "omni-memory.json"
         if not shared.exists() or shared.stat().st_size > _SHARED_MAX_BYTES:
             return
-        n = s.import_memories(json.loads(shared.read_text()), source="shared")
+        n = s.import_memories(json.loads(shared.read_text(encoding="utf-8")), source="shared")
         if n:
             digest.write_digest(s)
             print(f"omni-memory: loaded {n} shared memories from omni-memory.json "
@@ -442,6 +447,11 @@ def _bootstrap_shared(s, root):
 
 
 def _run_hook(args):
+    if hasattr(sys.stdin, "reconfigure"):
+        try:
+            sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     try:
         data = json.load(sys.stdin)
     except Exception:  # noqa: BLE001
@@ -538,11 +548,11 @@ def cmd_key(args):
     creds = {}
     if llm.CREDS.exists():
         try:
-            creds = _json.loads(llm.CREDS.read_text())
+            creds = _json.loads(llm.CREDS.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             creds = {}
     creds[env] = val
-    llm.CREDS.write_text(_json.dumps(creds, indent=2))
+    llm.CREDS.write_text(_json.dumps(creds, indent=2), encoding="utf-8")
     _os.chmod(llm.CREDS, 0o600)
     print(f"[+] saved {args.provider} key → {llm.CREDS} (chmod 600, gitignored)")
     return 0
@@ -599,7 +609,7 @@ def cmd_doctor(args):
     line(agents, "AGENTS.md", "present (cross-IDE context)" if agents else "missing",
          "run `omni-memory bind`")
     settings = root / ".claude" / "settings.json"
-    hooked = settings.exists() and "omni_memory hook" in settings.read_text()
+    hooked = settings.exists() and "omni_memory hook" in settings.read_text(encoding="utf-8", errors="ignore")
     line(hooked, "Claude Code hooks", "wired" if hooked else "not installed",
          "run `omni-memory bind claude-code`")
     prov = llm.provider()
@@ -608,8 +618,20 @@ def cmd_doctor(args):
     return 0
 
 
+def _force_utf8_io():
+    """OmniMemory emits Unicode (◇ ⚠ 🌐 → · in status/inject blocks). A Windows
+    console defaults to cp1252 and raises UnicodeEncodeError on print — so make
+    stdout/stderr UTF-8. No-op where already UTF-8 or unsupported."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main(argv=None):
     import argparse
+    _force_utf8_io()
     p = argparse.ArgumentParser(prog="omni-memory",
                                 description="Memory & context layer for coding agents.")
     p.add_argument("--version", action="version", version=f"omni-memory {__version__}")

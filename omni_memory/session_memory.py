@@ -125,7 +125,7 @@ def ingest_docs(store: Store, root: Path, max_files: int = 300) -> tuple[int, in
     added = 0
     for f in docs[:max_files]:
         try:
-            text = f.read_text(errors="ignore")
+            text = f.read_text(encoding="utf-8", errors="ignore")
         except Exception:  # noqa: BLE001
             continue
         rel = str(f.relative_to(root))

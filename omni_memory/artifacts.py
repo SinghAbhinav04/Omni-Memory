@@ -43,13 +43,13 @@ def _generate(root: Path, prompt: str) -> str:
 
 def generate_apimap(store: Store, root: Path) -> Path:
     out = store.dir / "api-map.md"
-    out.write_text(_generate(root, APIMAP_PROMPT) + "\n")
+    out.write_text(_generate(root, APIMAP_PROMPT) + "\n", encoding="utf-8")
     return out
 
 
 def generate_linkup(store: Store, root: Path) -> Path:
     out = store.dir / "linkup.md"
-    out.write_text(_generate(root, LINKUP_PROMPT) + "\n")
+    out.write_text(_generate(root, LINKUP_PROMPT) + "\n", encoding="utf-8")
     return out
 
 

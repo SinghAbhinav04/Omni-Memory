@@ -13,8 +13,12 @@ from typing import Optional
 
 def _git(root: Path, *args: str) -> str:
     try:
+        # encoding utf-8 + replace: git output (filenames, messages, diffs) is
+        # utf-8, but text=True would decode with the OS locale (cp1252 on Windows)
+        # and crash on any non-ASCII byte.
         r = subprocess.run(["git", "-C", str(root), *args],
-                           capture_output=True, text=True, timeout=15)
+                           capture_output=True, text=True, timeout=15,
+                           encoding="utf-8", errors="replace")
         return r.stdout.strip() if r.returncode == 0 else ""
     except Exception:  # noqa: BLE001
         return ""

@@ -26,7 +26,7 @@ def _key(name: str) -> str | None:
     if v:
         return v
     try:
-        return json.loads(CREDS.read_text()).get(name)
+        return json.loads(CREDS.read_text(encoding="utf-8")).get(name)
     except Exception:  # noqa: BLE001
         return None
 
@@ -80,7 +80,8 @@ def complete(system: str, user: str) -> str:
     if p == "agent":                       # run inside Claude Code / Antigravity CLI
         cmd = _agent_cmd()
         r = subprocess.run(cmd, input=system + "\n\n" + user,
-                           capture_output=True, text=True, timeout=300)
+                           capture_output=True, text=True, timeout=300,
+                           encoding="utf-8", errors="replace")
         if r.returncode != 0:
             raise RuntimeError(f"agent CLI failed: {r.stderr[:200]}")
         return r.stdout

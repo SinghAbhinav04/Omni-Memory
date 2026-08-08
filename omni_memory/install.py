@@ -85,7 +85,7 @@ def _install_claude_code() -> int:
     if settings.exists():
         shutil.copy2(settings, settings.with_suffix(f".json.bak-{int(time.time())}"))
         try:
-            data = json.loads(settings.read_text())
+            data = json.loads(settings.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             data = {}
     hooks = data.setdefault("hooks", {})
@@ -93,7 +93,7 @@ def _install_claude_code() -> int:
         existing = [h for h in hooks.get(event, [])
                     if "omni_memory hook" not in json.dumps(h)]
         hooks[event] = existing + val
-    settings.write_text(json.dumps(data, indent=2))
+    settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"[+] hooks written → {settings}")
     print("    SessionStart     → refreshes + seeds verified memory (incremental)")
     print("    UserPromptSubmit → injects verified memory (enforced)")

@@ -118,7 +118,7 @@ def extract_file(path: Path, root: Path) -> Optional[dict]:
     try:
         if path.stat().st_size > _MAX_BYTES:
             return None
-        src = path.read_text(errors="ignore")
+        src = path.read_text(encoding="utf-8", errors="ignore")
     except Exception:  # noqa: BLE001
         return None
     # minified/generated files pack everything onto a few enormous lines

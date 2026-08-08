@@ -17,8 +17,9 @@ STORE_DIRNAME = ".omni-memory"
 
 
 def find_project_root(start: Optional[Path] = None) -> Path:
-    """Nearest ancestor with a .git (or .omni-memory); else cwd."""
-    p = (start or Path.cwd()).resolve()
+    """Nearest ancestor with a .git (or .omni-memory); else cwd. Accepts a str or
+    Path (callers occasionally pass a string root)."""
+    p = (Path(start) if start else Path.cwd()).resolve()
     for cand in [p, *p.parents]:
         if (cand / ".git").exists() or (cand / STORE_DIRNAME).exists():
             return cand
@@ -34,7 +35,7 @@ def store_dir(root: Optional[Path] = None) -> Path:
     gi = d / ".gitignore"
     if not gi.exists():
         try:
-            gi.write_text("*\n")
+            gi.write_text("*\n", encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
     return d
@@ -116,7 +117,7 @@ def atomic_write(path: Path, text: str) -> None:
     # unique per call (pid + uuid): two threads in ONE process (e.g. the dashboard
     # watcher + a request handler) must not share a temp path and race on replace.
     tmp = path.parent / f".{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -130,7 +131,7 @@ class Store:
             gi = self.dir / ".gitignore"
             if not gi.exists():
                 try:
-                    gi.write_text("*\n")
+                    gi.write_text("*\n", encoding="utf-8")
                 except Exception:  # noqa: BLE001
                     pass
         else:

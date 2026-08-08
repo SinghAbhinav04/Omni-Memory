@@ -107,7 +107,7 @@ def _handler(root: Path):
                     name = b.get("name", "")
                     if name not in ("MEMORY.md", "api-map.md", "linkup.md"):
                         return self._send(400, json.dumps({"error": "bad doc name"}))
-                    (store.dir / name).write_text(b.get("content", ""))
+                    (store.dir / name).write_text(b.get("content", ""), encoding="utf-8")
                     return self._send(200, json.dumps({"ok": True}))
                 return self._send(404, json.dumps({"error": "not found"}))
             except Exception as e:  # noqa: BLE001
@@ -121,7 +121,7 @@ def _handler(root: Path):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             if u.path in ("/", "/index.html"):
-                html = STATIC.read_text() if STATIC.exists() else "<h1>OmniMemory</h1>"
+                html = STATIC.read_text(encoding="utf-8") if STATIC.exists() else "<h1>OmniMemory</h1>"
                 return self._send(200, html, "text/html")
             if u.path == "/api/memories":
                 cur, base = branchmod.scope(store, root)
@@ -186,7 +186,7 @@ def _handler(root: Path):
                 name = q.get("name", [""])[0]
                 f = store.dir / name
                 if name in ("MEMORY.md", "api-map.md", "linkup.md") and f.exists():
-                    return self._send(200, f.read_text(), "text/plain; charset=utf-8")
+                    return self._send(200, f.read_text(encoding="utf-8", errors="ignore"), "text/plain; charset=utf-8")
                 return self._send(404, "not found", "text/plain")
             return self._send(404, json.dumps({"error": "not found"}))
 

@@ -80,7 +80,7 @@ def write(store: Store, root: Path) -> Path:
     block = render_block(store, root)
     path = root / AGENTS_NAME
     if path.exists():
-        old = path.read_text(errors="ignore")
+        old = path.read_text(encoding="utf-8", errors="ignore")
         if START in old and END in old:
             pre = old.split(START, 1)[0]
             post = old.split(END, 1)[1]
