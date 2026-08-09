@@ -35,18 +35,72 @@ def _hooks_block() -> dict:
 
 
 # IDEs that read the repo-root AGENTS.md as project context. For these the
-# canonical file IS the integration — no bespoke hook system to wire.
-_AGENTS_IDES = ("opencode", "antigravity", "cursor", "windsurf")
+# canonical file IS the integration — no bespoke hook system to wire. OpenCode
+# gets that PLUS a native plugin (below), so it's handled separately.
+_AGENTS_IDES = ("antigravity", "cursor", "windsurf")
+
+
+# OpenCode plugin (.opencode/plugins/omnimemory.js). Grounded in the OpenCode
+# plugin API: a plugin exports async ({ $, directory }) => ({ hooks }); real
+# hooks include session.created / session.idle and experimental.session.
+# compacting, which is the one that can push into the model's context.
+_OPENCODE_PLUGIN = r'''// OmniMemory — OpenCode plugin
+// Keeps this project's verified memory fresh and re-injects it so it survives
+// context compaction. Requires the CLI:  pip install omni-memory-agent
+// https://github.com/SinghAbhinav04/Omni-Memory
+export const OmniMemory = async ({ $, directory }) => {
+  const refresh = async () => {
+    // rebuild-if-changed + refresh the AGENTS.md context this session reads
+    try { await $`echo {} | omni-memory hook start`.cwd(directory).quiet(); }
+    catch (e) { /* CLI absent or not a project — ignore */ }
+  };
+  return {
+    "session.created": refresh,   // fresh memory at the start of every session
+    "session.idle": refresh,      // …and kept current as you work
+    // when OpenCode compacts the conversation, re-inject verified project memory
+    // so it is not lost across the summary boundary
+    "experimental.session.compacting": async (_input, output) => {
+      try {
+        const res = await $`omni-memory inject`.cwd(directory).quiet();
+        const block = res.stdout.toString().trim();
+        if (block) output.context.push(block);
+      } catch (e) { /* ignore */ }
+    },
+  };
+};
+'''
 
 
 def install(platform: str = "claude-code") -> int:
     if platform == "claude-code":
         return _install_claude_code()
+    if platform == "opencode":
+        return _install_opencode()
     if platform in _AGENTS_IDES:
         return _install_agents_ide(platform)
     print(f"Unknown platform '{platform}'. "
-          f"Try: claude-code | {' | '.join(_AGENTS_IDES)}")
+          f"Try: claude-code | opencode | {' | '.join(_AGENTS_IDES)}")
     return 1
+
+
+def _install_opencode() -> int:
+    """OpenCode: write the native plugin (.opencode/plugins/omnimemory.js) so
+    memory refreshes each session and survives compaction, plus the AGENTS.md
+    that carries per-message context."""
+    proj = find_project_root()
+    _write_agents_md(proj)
+    pdir = proj / ".opencode" / "plugins"
+    try:
+        pdir.mkdir(parents=True, exist_ok=True)
+        (pdir / "omnimemory.js").write_text(_OPENCODE_PLUGIN, encoding="utf-8")
+        print(f"[+] OpenCode plugin → {pdir / 'omnimemory.js'}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[!] couldn't write the OpenCode plugin ({e})")
+    print("    Needs the CLI:  pip install omni-memory-agent")
+    print("    The plugin refreshes memory each session and re-injects it on")
+    print("    compaction; per-message context comes from AGENTS.md.")
+    print("    Restart OpenCode to load the plugin.")
+    return 0
 
 
 def detect_ide(root: Path) -> str:

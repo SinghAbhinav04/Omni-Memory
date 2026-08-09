@@ -88,14 +88,20 @@ def test_pipeline_survives_ascii_locale(store, repo):
     assert "OK" in res.stdout
 
 
-def test_opencode_bind_writes_agents_md(store, repo, monkeypatch):
+def test_opencode_bind_writes_plugin_and_agents_md(store, repo, monkeypatch):
     from omni_memory import install
     monkeypatch.chdir(repo)
     (repo / "opencode.json").write_text("{}\n", encoding="utf-8")
     assert install.detect_ide(repo) == "opencode"      # auto-detected
     assert install.bind("opencode") == 0
-    txt = (repo / "AGENTS.md").read_text(encoding="utf-8")
-    assert "OMNI-MEMORY:START" in txt                   # context written for OpenCode
+    # AGENTS.md context
+    assert "OMNI-MEMORY:START" in (repo / "AGENTS.md").read_text(encoding="utf-8")
+    # native OpenCode plugin with the real hook names
+    plugin = repo / ".opencode" / "plugins" / "omnimemory.js"
+    assert plugin.exists()
+    js = plugin.read_text(encoding="utf-8")
+    assert "session.created" in js and "experimental.session.compacting" in js
+    assert "omni-memory inject" in js
 
 
 def test_agents_md_managed_block(store, repo):
