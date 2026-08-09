@@ -91,7 +91,7 @@ def build_block(store: Store, root: Path, query: str = "",
         ENFORCE_RULES,
         "",
     ]
-    used, budget, has_external = 0, char_budget, False
+    used, budget, has_external, has_inferred = 0, char_budget, False, False
     for m in mems:
         tag = f"[{m['id']}]"
         where = (" · " + ", ".join(m["files"][:2])) if m["files"] else ""
@@ -107,13 +107,21 @@ def build_block(store: Store, root: Path, query: str = "",
         else:
             br = "" if cur != "*" else f" ({m['branch']})"
         stale = " ⚠STALE" if m.get("stale") else ""
+        # evidence: how it was learned. ✓ = confirmed by outcome (trust it);
+        # ~ = inferred/unconfirmed (weigh lightly). stated → no marker.
+        ev = {"verified": " ✓", "inferred": " ~"}.get(m.get("evidence"), "")
+        if m.get("evidence") == "inferred":
+            has_inferred = True
         text = m["text"] if len(m["text"]) <= _TEXT_CAP else m["text"][:_TEXT_CAP - 1] + "…"
-        line = f"{tag} {m['kind']}{br}{stale}: {text}{where}"
+        line = f"{tag}{ev} {m['kind']}{br}{stale}: {text}{where}"
         if used and budget - len(line) < 0:   # keep at least one; then honor budget
             break
         lines.append(line)
         budget -= len(line)
         used += 1
+    if has_inferred:
+        lines.insert(3, "Note: ✓ = verified by outcome (trust it); ~ = inferred/"
+                        "unconfirmed (weigh lightly, re-verify before relying).")
     if has_external:
         lines.insert(3, "Note: ↗external / 🌐global items came from outside this "
                         "project's own capture (imported/shared/global) — verify "

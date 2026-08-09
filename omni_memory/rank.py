@@ -142,6 +142,9 @@ def score_one(m: dict, terms: list[str], idf: dict, joined: str,
     score *= _KIND_WEIGHT.get(m.get("kind", "fact"), 1.0)
     score *= 0.5 + 0.5 * float(m.get("confidence") or 0.8)
     score *= 1.0 + _USE_W * math.log(1 + (m.get("uses") or 0))  # citation feedback
+    # evidence: a memory confirmed by outcome is more trustworthy than one merely
+    # inferred from comments/context — surface it higher, sink the guesses.
+    score *= {"verified": 1.2, "inferred": 0.8}.get(m.get("evidence"), 1.0)
     return score
 
 

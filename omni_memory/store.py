@@ -61,6 +61,11 @@ class Memory:
     status: str = "active"
     confidence: float = 0.8
     source: str = "session"
+    # How this memory was learned — drives trust, ranking, and pruning:
+    #   verified — confirmed by outcome (it broke/fixed something, a test, the user)
+    #   stated   — directly asserted as a decision/fact (default)
+    #   inferred — guessed from code/comments/docs, not confirmed
+    evidence: str = "stated"
     id: str = ""
     created: float = 0.0
     updated: float = 0.0
@@ -76,7 +81,7 @@ CREATE TABLE IF NOT EXISTS memory(
   id TEXT PRIMARY KEY, branch TEXT, kind TEXT, text TEXT,
   files TEXT, symbols TEXT, commit_range TEXT,
   created REAL, updated REAL, status TEXT, confidence REAL,
-  source TEXT, supersedes_id TEXT,
+  source TEXT, supersedes_id TEXT, evidence TEXT DEFAULT 'stated',
   stale INTEGER DEFAULT 0, stale_since REAL, stale_files TEXT);
 CREATE TABLE IF NOT EXISTS branches(
   name TEXT PRIMARY KEY, creator TEXT, created_at REAL, base_branch TEXT,
@@ -158,7 +163,8 @@ class Store:
         for col, decl in (("stale", "INTEGER DEFAULT 0"),
                           ("stale_since", "REAL"), ("stale_files", "TEXT"),
                           ("uses", "INTEGER DEFAULT 0"), ("last_used", "REAL"),
-                          ("quarantined_at", "REAL"), ("quarantine_reason", "TEXT")):
+                          ("quarantined_at", "REAL"), ("quarantine_reason", "TEXT"),
+                          ("evidence", "TEXT DEFAULT 'stated'")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE memory ADD COLUMN {col} {decl}")
         cn = {r["name"] for r in self.db.execute("PRAGMA table_info(code_nodes)")}
@@ -186,10 +192,12 @@ class Store:
         self.db.execute(
             "INSERT OR REPLACE INTO memory"
             "(id,branch,kind,text,files,symbols,commit_range,created,updated,"
-            "status,confidence,source,supersedes_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "status,confidence,source,supersedes_id,evidence) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (m.id, m.branch, m.kind, m.text, json.dumps(m.files),
              json.dumps(m.symbols), m.commit_range, m.created, m.updated,
-             m.status, m.confidence, m.source, m.supersedes_id))
+             m.status, m.confidence, m.source, m.supersedes_id,
+             getattr(m, "evidence", "stated")))
         self.db.commit()
         return m
 
@@ -339,12 +347,13 @@ class Store:
             now = time.time()
             self.db.execute(
                 "INSERT INTO memory(id,branch,kind,text,files,symbols,commit_range,"
-                "created,updated,status,confidence,source) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "created,updated,status,confidence,source,evidence) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (mid, m.get("branch", "main"), m.get("kind", "fact"), m.get("text", ""),
                  json.dumps(m.get("files", [])), json.dumps(m.get("symbols", [])),
                  m.get("commit_range", ""), m.get("created", now), now,
-                 "active", m.get("confidence", 0.8), source))
+                 "active", m.get("confidence", 0.8), source,
+                 m.get("evidence", "stated")))
             added += 1
         self.db.commit()
         return added
@@ -436,8 +445,8 @@ class Store:
         return {"memories": mems, "symbols": syms}
 
     def update_memory(self, mem_id: str, text: Optional[str] = None,
-                      kind: Optional[str] = None,
-                      files: Optional[list] = None) -> bool:
+                      kind: Optional[str] = None, files: Optional[list] = None,
+                      evidence: Optional[str] = None) -> bool:
         """Edit a memory in place (dashboard editing). Only provided fields change."""
         sets, vals = [], []
         if text is not None:
@@ -446,6 +455,8 @@ class Store:
             sets.append("kind=?"); vals.append(kind)
         if files is not None:
             sets.append("files=?"); vals.append(json.dumps(files))
+        if evidence in ("verified", "stated", "inferred"):
+            sets.append("evidence=?"); vals.append(evidence)
         if not sets:
             return False
         sets.append("updated=?"); vals.append(time.time())

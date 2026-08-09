@@ -23,10 +23,12 @@ EXTRACTION_PROMPT = f"""\
 You are OmniMemory's extractor. From the conversation + git diff below, extract
 durable project memory a FUTURE coding session must know. Output ONLY a JSON
 array; each item: {{"kind": one of {_KINDS_LINE}, "text": one concise sentence,
-"files": [paths], "symbols": [names]}}.
+"files": [paths], "symbols": [names], "evidence": "verified"|"stated"|"inferred"}}.
+Use "evidence": "verified" for things confirmed by outcome THIS session (a bug that
+bit, a fix that worked, a test result), "inferred" for guesses, else "stated".
 Capture: DECISIONS (and why), request/data FLOWS, event/Kafka CONTRACTs, ENDPOINT
 maps (controller->service->repo + key params), DB schema facts, reusable
-COMPONENTs, GOTCHAs, and TODOs. Mark uncertain items kind="assumption".
+COMPONENTs, GOTCHAs, and TODOs.
 Skip anything trivially obvious from the code. No prose — JSON only.
 """
 
@@ -35,12 +37,15 @@ BUILD_PROMPT = f"""\
 You are OmniMemory doing a ONE-TIME bootstrap of this repository. Study the code,
 config, and any docs, then output ONLY a JSON array of durable project memories:
 {{"kind": one of {_KINDS_LINE}, "text": one concise sentence, "files": [paths],
-"symbols": [names]}}.
+"symbols": [names], "evidence": "verified" | "stated" | "inferred"}}.
+Set "evidence": "verified" only when confirmed by outcome (a test, a failure/fix,
+explicit config), "inferred" when guessed from comments/naming/structure, else
+"stated". This drives how much the memory is trusted and how fast it's pruned.
 Prioritize, in order: (1) system ARCHITECTURE & key DECISIONs, (2) domain CONCEPTs,
 (3) end-to-end FLOWs, (4) event/Kafka CONTRACTs, (5) ENDPOINT map
 (path -> controller -> service -> repo/downstream + DTOs/params), (6) DB schema,
-(7) reusable COMPONENTs, (8) GOTCHAs/known issues. Mark inferred items
-kind="assumption". Be specific (real names, paths, topics). No prose — JSON only.
+(7) reusable COMPONENTs, (8) GOTCHAs/known issues. Be specific (real names, paths,
+topics). No prose — JSON only.
 """
 
 
@@ -55,12 +60,14 @@ def extract_citations(text: str, valid_ids: set) -> list[str]:
 
 def remember(store: Store, root: Path, text: str, kind: str = "fact",
              files: Optional[list[str]] = None, symbols: Optional[list[str]] = None,
-             source: str = "manual") -> Memory:
+             source: str = "manual", evidence: str = "stated") -> Memory:
     branch = gitmeta.current_branch(root)
     commit = gitmeta._git(root, "rev-parse", "--short", "HEAD")
+    if evidence not in ("verified", "stated", "inferred"):
+        evidence = "stated"
     m = Memory(text=text.strip(), kind=kind if kind in KINDS else "fact",
                branch=branch, files=files or [], symbols=symbols or [],
-               commit_range=commit, source=source)
+               commit_range=commit, source=source, evidence=evidence)
     return store.add_memory(m)
 
 
@@ -72,8 +79,11 @@ def remember_many(store: Store, root: Path, items: list[dict], source: str = "se
         text = (it.get("text") or "").strip()
         if not text:
             continue
+        # agent capture / AI build can mark evidence; docs & AI default to inferred
+        default_ev = "inferred" if source in ("ai-build", "doc") else "stated"
         remember(store, root, text, it.get("kind", "fact"),
-                 it.get("files"), it.get("symbols"), source=source)
+                 it.get("files"), it.get("symbols"), source=source,
+                 evidence=it.get("evidence", default_ev))
         n += 1
     return n
 

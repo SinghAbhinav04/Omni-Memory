@@ -296,6 +296,7 @@ async function renderMemory(){
     .map(m=>`<div class="mem" style="cursor:pointer">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px" data-mem="${esc(m.id)}">
         ${m.kind?`<span class="badge k-${esc(m.kind)}">${esc(m.kind)}</span>`:''}
+        ${m.evidence==='verified'?'<span title="verified by outcome" style="color:#7fe0a8">✓</span>':m.evidence==='inferred'?'<span title="inferred / unconfirmed" style="color:#c8a24a">~</span>':''}
         <span class="k" style="letter-spacing:.04em">${esc(m.branch)}${m.stale?' · ⚠STALE':''}</span>
         <span class="k" style="margin-left:auto">[${m.id}] ✎</span></div>
       <div class="t" data-mem="${esc(m.id)}">${esc(m.text)}</div>
@@ -537,7 +538,7 @@ function closeInspector(){ insp.classList.remove('open'); insp.innerHTML=''; }
 // Editable memory inspector — mem=null means "add new"
 function openMemoryInspector(mem){
   const isNew = !mem;
-  mem = mem || {id:'', kind:'fact', text:'', files:[], branch:''};
+  mem = mem || {id:'', kind:'fact', text:'', files:[], branch:'', evidence:'stated'};
   insp.classList.add('open');
   insp.innerHTML = `
     <div class="ihead">
@@ -551,6 +552,9 @@ function openMemoryInspector(mem){
         <button class="btn" id="mreanchor" style="margin-top:8px">Mark re-verified (re-anchor)</button></div>`:''}
       <div class="sec">Kind</div>
       <select id="mkind">${KINDS.map(k=>`<option ${k===mem.kind?'selected':''}>${k}</option>`).join('')}</select>
+      <div class="sec">Evidence — how it was learned</div>
+      <select id="mev">${['verified','stated','inferred'].map(e=>`<option ${e===(mem.evidence||'stated')?'selected':''}>${e}</option>`).join('')}</select>
+      <div class="hint" style="margin:-8px 0 8px;font-size:11px">✓ verified = confirmed by outcome (trusted, pruned last) · ~ inferred = guessed (pruned first)</div>
       <div class="sec">Text</div>
       <textarea id="mtext" placeholder="One clear sentence of durable project knowledge…">${esc(mem.text)}</textarea>
       <div class="sec">Files (comma-separated, optional)</div>
@@ -568,11 +572,11 @@ function openMemoryInspector(mem){
   $('#msave').onclick = async ()=>{
     const text=$('#mtext').value.trim(); if(!text){ $('#mmsg').textContent='Text is required.'; return; }
     const files=$('#mfiles').value.split(',').map(s=>s.trim()).filter(Boolean);
-    const kind=$('#mkind').value;
+    const kind=$('#mkind').value, evidence=$('#mev').value;
     $('#mmsg').textContent='Saving…';
     try{
-      if(isNew) await post('/api/memory/add', {text,kind,files});
-      else await post('/api/memory/update', {id:mem.id,text,kind,files});
+      if(isNew) await post('/api/memory/add', {text,kind,files,evidence});
+      else await post('/api/memory/update', {id:mem.id,text,kind,files,evidence});
       closeInspector(); if(activeTab==='memory') render('memory');
     }catch(e){ $('#mmsg').textContent='Failed: '+e.message; }
   };

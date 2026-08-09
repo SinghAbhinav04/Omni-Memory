@@ -56,20 +56,24 @@ def cmd_branch_aware(args):
 
 
 def cmd_remember(args):
-    """`remember <text> [--kind] [--global]` — add one memory by hand. With
-    --global it goes to the shared ~/.omni-memory store and injects into EVERY
-    project (your standing preferences/knowledge)."""
+    """`remember <text> [--kind] [--global] [--verified|--inferred]` — add one
+    memory by hand. Evidence marks how it was learned: --verified (confirmed by
+    outcome, trusted + pruned last), --inferred (guessed, pruned first), else
+    stated. --global stores it in ~/.omni-memory (injects into every project)."""
+    evidence = ("verified" if getattr(args, "verified", False)
+                else "inferred" if getattr(args, "inferred", False) else "stated")
     if getattr(args, "glob", False):
         from .store import Store, Memory, global_dir
         gs = Store(exact_dir=global_dir())
         m = gs.add_memory(Memory(text=" ".join(args.text), kind=args.kind,
-                                 branch="global", source="manual"))
-        print(f"[+] remembered GLOBALLY [{m.id}] ({m.kind}): {m.text}")
+                                 branch="global", source="manual", evidence=evidence))
+        print(f"[+] remembered GLOBALLY [{m.id}] ({m.kind} · {evidence}): {m.text}")
         return 0
     s, root = _store()
-    m = sm.remember(s, root, " ".join(args.text), kind=args.kind, source="manual")
+    m = sm.remember(s, root, " ".join(args.text), kind=args.kind, source="manual",
+                    evidence=evidence)
     digest.write_digest(s)
-    print(f"[+] remembered [{m.id}] ({m.kind}, branch {m.branch}): {m.text}")
+    print(f"[+] remembered [{m.id}] ({m.kind} · {evidence}, branch {m.branch}): {m.text}")
     return 0
 
 
@@ -642,6 +646,8 @@ def main(argv=None):
     sub.add_parser("branch-aware")
     r = sub.add_parser("remember"); r.add_argument("--kind", default="fact")
     r.add_argument("--global", dest="glob", action="store_true", help="store in the shared ~/.omni-memory (injects everywhere)")
+    r.add_argument("--verified", action="store_true", help="confirmed by outcome (trusted, pruned last)")
+    r.add_argument("--inferred", action="store_true", help="guessed from code/context (pruned first)")
     r.add_argument("text", nargs="+")
     sub.add_parser("capture")
     ij = sub.add_parser("inject"); ij.add_argument("query", nargs="*"); ij.add_argument("--file", action="append")

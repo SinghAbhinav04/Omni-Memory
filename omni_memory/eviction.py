@@ -47,6 +47,15 @@ def evict_score(m: dict, branch_state: str, now: float) -> float:
     score += _KIND_DECAY.get(m.get("kind"), 0.0)
     score += (1.0 - float(m.get("confidence") or 0.8)) * 0.1
 
+    # evidence asymmetry: a guess inferred from context is cheaper to be wrong
+    # about than a memory earned by outcome. Prune inferred faster; shield
+    # verified so battle-tested knowledge survives longer.
+    evidence = m.get("evidence")
+    if evidence == "inferred":
+        score += 0.15
+    elif evidence == "verified":
+        score -= 0.30
+
     if uses > 0:  # citation shield — proven-useful memory resists eviction
         score -= min(0.5, 0.15 * math.log(1 + uses))
         lu = m.get("last_used")

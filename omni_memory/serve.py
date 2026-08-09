@@ -76,13 +76,15 @@ def _handler(root: Path):
                         text=(b.get("text") or "").strip(),
                         kind=b.get("kind") or "fact",
                         branch=(None if cur == "*" else cur) or "main",
-                        files=b.get("files") or [], source="dashboard"))
+                        files=b.get("files") or [], source="dashboard",
+                        evidence=b.get("evidence") or "stated"))
                     _sync_docs(store, root)
                     return self._send(200, json.dumps({"ok": True, "id": m.id}))
                 if u.path == "/api/memory/update":
                     b = self._body()
                     ok = store.update_memory(b.get("id", ""), text=b.get("text"),
-                                             kind=b.get("kind"), files=b.get("files"))
+                                             kind=b.get("kind"), files=b.get("files"),
+                                             evidence=b.get("evidence"))
                     _sync_docs(store, root)
                     return self._send(200 if ok else 404,
                                       json.dumps({"ok": ok}))
