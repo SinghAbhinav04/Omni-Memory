@@ -67,6 +67,22 @@ def available() -> bool:
     return provider() is not None
 
 
+def autocapture_ok() -> bool:
+    """Whether an UNATTENDED SessionEnd capture may call a model.
+
+    We deliberately do NOT spawn the coding-agent CLI (`claude -p`) on autopilot:
+    that's a whole extra headless Claude invocation over the full transcript on
+    every session end — the single biggest recurring token cost. So automatic
+    capture uses the free heuristic extractor unless the user has a real API key
+    configured (a genuine headless/CI setup) or opts in with OMNI_HEADLESS_LLM=1.
+    Inside Claude Code, the *main* agent should capture during the session (the
+    skill instructs this) — that reuses context it already paid for."""
+    p = provider()
+    if os.environ.get("OMNI_HEADLESS_LLM"):
+        return p is not None
+    return p is not None and p != "agent"
+
+
 def _post(url: str, headers: dict, payload: dict, timeout: int = 120) -> dict:
     data = json.dumps(payload).encode()
     req = urllib.request.Request(

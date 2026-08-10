@@ -48,8 +48,11 @@ result. No external model key is required.
 - **End of a task:** run `omni-memory prompt session`, extract the durable
   memories from what just happened, and `echo '<JSON>' | omni-memory capture`.
 
-Headless (SessionEnd hook) uses the `claude -p` CLI or an optional API key
-(`omni-memory key anthropic`) so capture still fires when no agent is present.
+**Capture the memories yourself at the end of a task** — the SessionEnd hook's
+automatic capture is a FREE heuristic pass (no `claude -p`, to save tokens), so the
+high-quality extraction must come from you, the agent, running
+`omni-memory prompt session` → `omni-memory capture`. Set an API key or
+`OMNI_HEADLESS_LLM=1` only if you want the hook to do an LLM pass unattended.
 
 ## How to use it in a session
 1. **Start of a task:** run `omni-memory inject "<the user's request>"` and treat

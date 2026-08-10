@@ -106,13 +106,13 @@ def capture_from_json(store: Store, root: Path, raw: str,
         if not isinstance(items, list):
             raise ValueError
     except Exception:  # noqa: BLE001
-        if llm.available():
+        if llm.autocapture_ok():                    # real API key / opt-in only
             try:
-                items = llm.extract_memories(EXTRACTION_PROMPT, raw[:140_000])
+                items = llm.extract_memories(EXTRACTION_PROMPT, raw[:30_000])
                 source = "ai-session"
             except Exception:  # noqa: BLE001
                 items = _heuristic_extract(raw)
-        else:
+        else:                                       # free: no `claude -p` on autopilot
             items = _heuristic_extract(raw)
     return remember_many(store, root, items, source=source)
 

@@ -407,6 +407,12 @@ def cmd_usage(args):
     if mem_md.exists():
         print(f"  MEMORY.md (@-ref)    : ~{toks(mem_md.read_text(encoding='utf-8', errors='ignore')):>4} tok   · only if you @-reference it")
     print(f"\n  settings: max_items={mi}  char_budget={cb}")
+    print("  per-prompt block re-injects only when memory changes (deduped) —"
+          " not every turn.")
+    from . import llm
+    cap = "LLM" if llm.autocapture_ok() else "heuristic (free — no claude -p on autopilot)"
+    print(f"  SessionEnd auto-capture: {cap}."
+          + ("" if llm.autocapture_ok() else " Set OMNI_HEADLESS_LLM=1 or an API key for LLM capture."))
     print("  lower it: omni-memory usage --max-items 6 --budget 1000")
     return 0
 
@@ -422,6 +428,43 @@ def cmd_hook(args):
 
 
 _SHARED_MAX_BYTES = 2_000_000
+
+
+_INJECT_REFRESH_EVERY = 20   # re-emit an unchanged block every N prompts (compaction safety)
+
+
+def _write_inject_state(path, h, count):
+    try:
+        path.write_text(f"{h} {count}", encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _mark_injected(s, block):
+    import hashlib
+    _write_inject_state(s.dir / ".inject_cache",
+                        hashlib.sha1(block.encode("utf-8")).hexdigest(), 0)
+
+
+def _should_inject(s, block):
+    """True only when this block differs from the last one injected (the memory
+    changed), or enough prompts have passed that it may have scrolled out of
+    context. Otherwise the block is already in the session — re-emitting it just
+    burns tokens every turn."""
+    import hashlib
+    h = hashlib.sha1(block.encode("utf-8")).hexdigest()
+    p = s.dir / ".inject_cache"
+    last_h, count = "", 0
+    try:
+        parts = p.read_text(encoding="utf-8").split()
+        last_h, count = parts[0], (int(parts[1]) if len(parts) > 1 else 0)
+    except Exception:  # noqa: BLE001
+        pass
+    if h != last_h or count + 1 >= _INJECT_REFRESH_EVERY:
+        _write_inject_state(p, h, 0)
+        return True
+    _write_inject_state(p, h, count + 1)
+    return False
 
 
 def _bootstrap_shared(s, root):
@@ -476,10 +519,14 @@ def _run_hook(args):
         block = inject.build_block(s, root, query="")
         if block:
             print(block)                        # seed the session context
+            _mark_injected(s, block)            # so the first prompt won't repeat it
         return 0
     if args.event == "inject":                 # UserPromptSubmit → add memory to context
         block = inject.build_block(s, root, query=data.get("prompt", ""))
-        if block:
+        # De-dupe: the block already lives in this session's context, so re-emitting
+        # an identical one every prompt just compounds tokens. Emit only when the
+        # relevant memory CHANGED (or periodically, so it survives compaction).
+        if block and _should_inject(s, block):
             print(block)                        # stdout is added to the prompt context
         return 0
     if args.event == "capture":                # SessionEnd/Stop → extract + store
