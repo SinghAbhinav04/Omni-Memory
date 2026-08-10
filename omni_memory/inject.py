@@ -38,8 +38,20 @@ ENFORCE_RULES = (
 # per-project via meta keys so users can trade recall for tokens.
 _MAX_ITEMS = 8           # hard cap on injected memories (was 10)
 _WIDEN_ITEMS = 4         # when nothing matched, only a few top memories
-_TEXT_CAP = 160          # truncate long memory text
+_TEXT_CAP = 200          # truncate long memory text (at a word boundary)
 _CHAR_BUDGET = 1400      # ~350 tokens for the whole block (was 1800)
+
+
+def _clip(text: str, cap: int) -> str:
+    """Trim to `cap` chars at a word boundary — never mid-word — with an ellipsis.
+    (The store keeps the full memory; this only shrinks it for the prompt.)"""
+    if len(text) <= cap:
+        return text
+    cut = text[:cap - 1]
+    sp = cut.rfind(" ")
+    if sp > cap * 0.6:                        # prefer a clean word break
+        cut = cut[:sp]
+    return cut.rstrip(" ,;:.-") + "…"
 
 
 def build_block(store: Store, root: Path, query: str = "",
@@ -112,7 +124,7 @@ def build_block(store: Store, root: Path, query: str = "",
         ev = {"verified": " ✓", "inferred": " ~"}.get(m.get("evidence"), "")
         if m.get("evidence") == "inferred":
             has_inferred = True
-        text = m["text"] if len(m["text"]) <= _TEXT_CAP else m["text"][:_TEXT_CAP - 1] + "…"
+        text = _clip(m["text"], _TEXT_CAP)
         line = f"{tag}{ev} {m['kind']}{br}{stale}: {text}{where}"
         if used and budget - len(line) < 0:   # keep at least one; then honor budget
             break

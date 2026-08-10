@@ -15,7 +15,13 @@ from __future__ import annotations
 import re
 
 _MIN_CHARS = 12
-_MAX_CHARS = 280
+# Storage-worthiness is NOT the same as injection-size: injection truncates
+# independently (inject._TEXT_CAP), so the store can safely keep a longer, dense
+# memory. We only reject candidates that are so long they're clearly a dumped
+# paragraph rather than one atomic fact — by word count (the real signal) with a
+# generous char ceiling as a backstop.
+_MAX_CHARS = 600
+_MAX_WORDS = 60
 _PROSE_WORDS = 8  # a label with >= this many words reads like prose, not a name
 
 # Sources whose output is untrusted prose and must carry a concrete anchor.
@@ -51,7 +57,7 @@ def _has_anchor(text: str) -> bool:
 def is_noise(text: str, files=None, symbols=None, source: str = "session") -> bool:
     """True if this candidate memory should be dropped as extraction noise."""
     t = (text or "").strip()
-    if len(t) < _MIN_CHARS or len(t) > _MAX_CHARS:
+    if len(t) < _MIN_CHARS or len(t) > _MAX_CHARS or len(t.split()) > _MAX_WORDS:
         return True
     # structural markdown / doc scaffolding
     if t[0] in "#>|=" or t.startswith(("```", "---", "* ", "- ")) and len(t.split()) < 3:
