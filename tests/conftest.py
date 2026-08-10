@@ -49,6 +49,10 @@ def _git(root: Path, *args: str) -> None:
 def repo(tmp_path: Path) -> Path:
     """A fresh git repo with the sample source committed and .omni-memory ignored."""
     _git(tmp_path, "init", "-q")
+    # Force the default branch to `main` regardless of the runner's git config
+    # (CI often defaults to `master`, which desynced branch-scoped tests). Portable
+    # across git versions since it sets the yet-unborn branch.
+    _git(tmp_path, "symbolic-ref", "HEAD", "refs/heads/main")
     _git(tmp_path, "config", "user.email", "t@t")
     _git(tmp_path, "config", "user.name", "t")
     (tmp_path / ".gitignore").write_text(".omni-memory/\n")

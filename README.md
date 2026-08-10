@@ -125,4 +125,6 @@ on 3.9 the base install still works and graphs Python via `ast`. Roadmap:
 Antigravity via MCP, more languages, runtime request-flow capture. See `PLAN.md`.
 
 ## License
-MIT © 2026 Abhinav Singh
+**Proprietary © 2026 Abhinav Singh. All rights reserved.** OmniMemory is
+*not* open source — you may install and run the official published package, but
+not copy, modify, redistribute, or claim it as your own. See [`LICENSE`](LICENSE).

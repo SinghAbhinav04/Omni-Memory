@@ -680,6 +680,17 @@ def cmd_doctor(args):
     stale = s.db.execute("SELECT COUNT(*) n FROM memory WHERE status='active' AND stale=1").fetchone()["n"]
     line(active > 0, "memories", f"{active} active" + (f", ⚠ {stale} stale" if stale else ""),
          "capture some (work a session) or `omni-memory build`")
+    try:  # measured provenance: what fraction of anchored memory is re-fetchable
+        from . import staleness
+        rec = staleness.reconcile(s, root)
+        if rec["anchored"]:
+            pct = int(rec["coverage"] * 100)
+            line(None if rec["orphaned"] else True, "source coverage",
+                 f"{pct}% of {rec['anchored']} anchored memories re-fetchable"
+                 + (f", ⚠ {rec['orphaned']} orphaned (source deleted)" if rec["orphaned"] else ""),
+                 "orphans are flagged stale — clear with `omni-memory gc`")
+    except Exception:  # noqa: BLE001
+        pass
     agents = (root / "AGENTS.md").exists()
     line(agents, "AGENTS.md", "present (cross-IDE context)" if agents else "missing",
          "run `omni-memory bind`")

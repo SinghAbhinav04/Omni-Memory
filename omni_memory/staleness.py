@@ -93,6 +93,44 @@ def recompute(store: Store, root: Path) -> dict:
             "level": "symbol" if use_symbols else "file"}
 
 
+def reconcile(store: Store, root: Path) -> dict:
+    """Enumerate the SOURCE and diff it against memory to catch ORPHANS — memories
+    whose anchored file (or symbol) was DELETED at the source.
+
+    This is the half staleness-by-diff can't self-heal: a change re-flags itself
+    on the next pass that touches the file, but a deletion emits exactly one event
+    and nothing later mentions it, so an index-side query never notices what's
+    missing. Because OmniMemory anchors memories to concrete git-tracked files and
+    code-graph symbols, we can enumerate the live source and mark anything that no
+    longer resolves. Orphans are flagged stale (→ eviction candidates)."""
+    if not gitmeta.is_repo(root):
+        return {"orphaned": 0, "coverage": 0.0, "anchored": 0}
+    from .graph import extract
+    live_files = {str(p.relative_to(root)) for p in extract._source_files(root)
+                  if p.is_file()}
+    sym_names = {n["name"] for n in store.code_graph()[0]
+                 if n["kind"] in ("function", "method", "class")}
+    now = time.time()
+    orphaned = anchored = refetchable = 0
+    for r in store.db.execute(
+            "SELECT id, files, symbols, stale FROM memory WHERE status='active'"):
+        files = json.loads(r["files"] or "[]")
+        symbols = json.loads(r["symbols"] or "[]")
+        if not files and not symbols:
+            continue                              # unanchored — can't reconcile
+        anchored += 1
+        file_alive = any(f in live_files or (root / f).exists() for f in files)
+        sym_alive = any(s.split("::")[-1].split(".")[-1] in sym_names for s in symbols)
+        if file_alive or sym_alive:
+            refetchable += 1
+        else:                                     # every anchor gone → orphaned
+            orphaned += 1
+            store.set_stale(r["id"], True, None if r["stale"] else now, ["<deleted>"])
+    store.db.commit()
+    coverage = (refetchable / anchored) if anchored else 0.0
+    return {"orphaned": orphaned, "coverage": round(coverage, 3), "anchored": anchored}
+
+
 def _affected_symbols(root: Path, anchor: str, head: str, changed_files: set,
                       file_symbols: dict, edges: list) -> set:
     """Symbols that changed between anchor..head, plus their dependents."""

@@ -35,6 +35,11 @@ def full_refresh(store: Store, root: Path) -> dict:
     except Exception:  # noqa: BLE001 — fall back to file-level staleness
         pass
     snap = sync_git(store, root)
+    try:  # flag orphans — memories whose source file/symbol was deleted
+        from . import staleness
+        staleness.reconcile(store, root)
+    except Exception:  # noqa: BLE001
+        pass
     try:  # keep the IDE-agnostic AGENTS.md context current for the next session
         from . import agentsmd
         agentsmd.write(store, root)

@@ -1,9 +1,9 @@
 [project]
 name = "omni-memory-agent"
-version = "0.9.15"
+version = "0.9.16"
 description = "Persistent, branch-aware, git-anchored memory & context layer for coding agents."
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "Proprietary — All Rights Reserved (see LICENSE)" }
 requires-python = ">=3.9"
 authors = [{ name = "Abhinav Singh" }]
 keywords = ["ai", "memory", "coding-agent", "knowledge-graph", "claude-code", "mcp"]

@@ -579,7 +579,12 @@ def _extract_treesitter(rel: str, src: str, lang: str) -> dict:
                 r["symbols"].append({
                     "id": sid, "kind": kind, "name": nm, "file": rel,
                     "line_start": c.start_point[0] + 1,
-                    "line_end": c.end_point[0] + 1, "parent": parent_id})
+                    "line_end": c.end_point[0] + 1, "parent": parent_id,
+                    # same rich fields as the ast/regex backends (these were
+                    # missing here, so the dossier had no params/doc/raises on
+                    # tree-sitter installs — i.e. every Python ≥3.10 user)
+                    "signature": "" if is_class else signature_of(c),
+                    "doc": doc_of(c), "raises": raises_of(c)})
                 if is_class:
                     bf = None
                     if spec.get("bases_field"):

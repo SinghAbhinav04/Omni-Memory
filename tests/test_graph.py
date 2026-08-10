@@ -140,6 +140,35 @@ def test_ts_repo_gets_code_graph(tmp_path):
     assert {"f", "g"} <= names
 
 
+def test_reconcile_flags_orphaned_source(store, repo):
+    """A memory whose anchored file was DELETED at source is flagged orphaned
+    (source-diff reconciliation), while a live-anchor memory stays fresh."""
+    import subprocess
+    from omni_memory import staleness, branch as branchmod
+    from omni_memory.store import Memory
+    (repo / "gone.py").write_text("def dead():\n    return 2\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "add gone"], check=True, capture_output=True)
+    branchmod.full_refresh(store, repo)
+    live = store.add_memory(Memory(text="Service.create_order builds the row", kind="flow",
+                                   branch="main", files=["svc.py"], symbols=["create_order"]))
+    orphan = store.add_memory(Memory(text="dead() returns 2", kind="fact",
+                                     branch="main", files=["gone.py"], symbols=["dead"]))
+    (repo / "gone.py").unlink()
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "rm gone"], check=True, capture_output=True)
+    from omni_memory.graph import extract as _ex
+    _ex._EXTRACT_CACHE.clear()
+    branchmod.full_refresh(store, repo)
+    rec = staleness.reconcile(store, repo)
+    assert rec["orphaned"] >= 1
+    assert store.get_memory(orphan.id)["stale"]        # deleted source → orphaned
+    assert not store.get_memory(live.id)["stale"]      # live anchor → fresh
+    assert 0 < rec["coverage"] < 1                      # measured re-fetchable ratio
+
+
 def test_symbol_dossier(store, repo):
     codegraph.build_code_graph(store, repo)
     co_id = next(n["id"] for n in store.code_graph()[0] if n["name"] == "create_order")
