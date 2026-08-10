@@ -549,13 +549,22 @@ def _extract_treesitter(rel: str, src: str, lang: str) -> dict:
         body = fn.child_by_field_name("body")
         if body is None:
             return ""
-        for c in body.children:  # python: first stmt is an expression_statement>string
-            if c.type in ("expression_statement", "comment"):
-                s = next((d for d in _descendants(c) if d.type == "string"), None)
-                if s is not None or c.type == "comment":
-                    return _first_line(text(s if s is not None else c).strip("\"'`# \t/*"))
-            if c.type not in ("comment",):
-                break
+        # The docstring is the block's first statement. Grammars differ: older
+        # tree-sitter-python wraps it in an `expression_statement`, current ones
+        # put the `string` node directly in the block. Handle both, plus a
+        # leading comment, and read the quote-free `string_content` when present.
+        for c in body.children:
+            if c.type == "comment":
+                return _first_line(text(c).strip("# \t/*"))
+            if c.type in ("expression_statement", "string"):
+                s = c if c.type == "string" else next(
+                    (d for d in _descendants(c) if d.type == "string"), None)
+                if s is None:
+                    break
+                sc = next((d for d in s.children if d.type == "string_content"), None)
+                return _first_line(text(sc) if sc is not None
+                                   else text(s).strip("\"'`# \t"))
+            break  # first real statement isn't a docstring
         return ""
 
     def raises_of(fn) -> list[str]:
