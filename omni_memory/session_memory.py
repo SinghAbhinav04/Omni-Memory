@@ -71,9 +71,12 @@ def remember(store: Store, root: Path, text: str, kind: str = "fact",
     return store.add_memory(m)
 
 
-def remember_many(store: Store, root: Path, items: list[dict], source: str = "session") -> int:
+def remember_many(store: Store, root: Path, items: list[dict],
+                  source: str = "session") -> tuple[int, int]:
+    """Store the given memory items; returns (added, dropped_as_noise) so callers
+    can tell the user when the noise filter silently rejected candidates."""
     from . import cleanup
-    items, _dropped = cleanup.filter_items(items, source=source)
+    items, dropped = cleanup.filter_items(items, source=source)
     n = 0
     for it in items:
         text = (it.get("text") or "").strip()
@@ -85,10 +88,11 @@ def remember_many(store: Store, root: Path, items: list[dict], source: str = "se
                  it.get("files"), it.get("symbols"), source=source,
                  evidence=it.get("evidence", default_ev))
         n += 1
-    return n
+    return n, dropped
 
 
-def capture_from_json(store: Store, root: Path, raw: str, source: str = "session") -> int:
+def capture_from_json(store: Store, root: Path, raw: str,
+                      source: str = "session") -> tuple[int, int]:
     """Ingest memory from the agent's JSON, or extract it from a raw transcript.
 
     Order: (1) already-JSON → ingest; (2) a model is configured → semantic
@@ -142,7 +146,8 @@ def ingest_docs(store: Store, root: Path, max_files: int = 300) -> tuple[int, in
         items = _heuristic_extract(text)
         for it in items:
             it.setdefault("files", []).append(rel)
-        added += remember_many(store, root, items, source="doc")
+        a, _dropped = remember_many(store, root, items, source="doc")
+        added += a
     return added, len(docs)
 
 

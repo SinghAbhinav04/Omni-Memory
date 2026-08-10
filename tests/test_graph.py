@@ -96,6 +96,50 @@ def test_only_project_source_graphed(tmp_path):
     assert "a" not in names                         # minified bundle out
 
 
+def test_js_regex_extraction():
+    """The stdlib JS/TS backend (no tree-sitter) graphs functions, classes,
+    methods, calls, and throws — so the plugin works on a TypeScript repo."""
+    ts = (
+        "export async function createClaim(user, amount) {\n"
+        "  if (!amount) throw new ValidationError('no amount');\n"
+        "  return insertClaim(user, amount);\n"
+        "}\n"
+        "function insertClaim(u, a) { return {id: 1}; }\n"
+        "class ClaimService extends BaseService {\n"
+        "  async process(id) {\n"
+        "    return createClaim('x', 1);\n"
+        "  }\n"
+        "}\n")
+    fx = extract._extract_js_regex("svc.ts", ts)
+    by = {s["name"]: s for s in fx["symbols"]}
+    assert {"createClaim", "insertClaim", "ClaimService", "process"} <= set(by)
+    assert by["process"]["kind"] == "method"
+    assert by["process"]["parent"].endswith("::ClaimService")
+    assert "ValidationError" in by["createClaim"]["raises"]
+    calls = {(c["src"].split("::")[-1], c["name"]) for c in fx["calls"]}
+    assert ("createClaim", "insertClaim") in calls
+    assert {"cls": "svc.ts::ClaimService", "name": "BaseService"} in fx["bases"]
+
+
+def test_ts_repo_gets_code_graph(tmp_path):
+    """End-to-end: a git-tracked .ts repo yields a non-empty code graph via the
+    stdlib backend (build.py drops the external base but keeps in-repo edges)."""
+    import subprocess
+    d = tmp_path / "ts"
+    d.mkdir()
+    subprocess.run(["git", "-C", str(d), "init", "-q"], check=True)
+    (d / "a.ts").write_text("export function f(){ return g(); }\nfunction g(){ return 1; }\n")
+    subprocess.run(["git", "-C", str(d), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "i"], check=True, capture_output=True)
+    extract._EXTRACT_CACHE.clear()
+    from omni_memory.store import Store
+    s = Store(d)
+    codegraph.build_code_graph(s, d)
+    names = {n["name"] for n in s.code_graph()[0] if n["kind"] != "file"}
+    assert {"f", "g"} <= names
+
+
 def test_symbol_dossier(store, repo):
     codegraph.build_code_graph(store, repo)
     co_id = next(n["id"] for n in store.code_graph()[0] if n["name"] == "create_order")

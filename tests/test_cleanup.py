@@ -39,3 +39,12 @@ def test_inject_clip_is_word_boundary():
 
 def test_inject_clip_noop_when_short():
     assert inject._clip("short one", 200) == "short one"
+
+
+def test_remember_many_reports_dropped(store, repo):
+    from omni_memory import session_memory as sm
+    items = [{"text": "## heading"},                         # noise
+             {"text": "gotcha: never call charge() before the order row commits",
+              "kind": "gotcha"}]                              # kept
+    added, dropped = sm.remember_many(store, repo, items, source="session")
+    assert added == 1 and dropped == 1

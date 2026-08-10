@@ -147,6 +147,26 @@ def merge_info(root: Path, branch: str, into: str,
     return True, (sha or tip), when
 
 
+def is_squash_merged(root: Path, branch: str, base: str) -> bool:
+    """True if `branch` is effectively merged into `base` via SQUASH or REBASE —
+    the common PR workflow that `git branch --merged` misses (no merge commit).
+
+    `git cherry <base> <branch>` marks each of the branch's commits `-` if an
+    equivalent patch already exists in base, `+` if not. If nothing is `+`, every
+    change is already in base → merged. Only call this for branches with a small
+    `ahead` count (the caller gates it) so it stays cheap."""
+    out = _git(root, "cherry", base, branch)
+    if not out:
+        return False
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    return bool(lines) and not any(ln.startswith("+") for ln in lines)
+
+
+# A branch this far ahead of base is genuinely divergent, not a squashed PR —
+# skip the (per-branch) cherry check to keep `snapshot` cheap on big repos.
+_SQUASH_AHEAD_MAX = 30
+
+
 def commits_on(root: Path, branch: str, base: str, limit: int = 200) -> list[dict]:
     """Commits (with changed files) unique to `branch` vs `base`, in ONE git call.
 
@@ -199,6 +219,11 @@ def snapshot(root: Path) -> dict:
             merged, mc, when = False, "", 0.0
         else:
             merged, mc, when = merge_info(root, b, base, merged_set=merged_set)
+            # catch squash/rebase merges that `git branch --merged` can't see —
+            # only for branches with a few unique commits (cheap `git cherry`).
+            if not merged and 0 < ahead <= _SQUASH_AHEAD_MAX \
+                    and is_squash_merged(root, b, base):
+                merged, mc, when = True, _git(root, "rev-parse", b), 0.0
         branches.append({
             "name": b, "creator": creator, "created_at": created_at,
             "base_branch": None if b == base else base,

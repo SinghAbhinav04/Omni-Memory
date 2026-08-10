@@ -86,9 +86,10 @@ def cmd_capture(args):
         except Exception:
             pass
     raw = sys.stdin.read()
-    n = sm.capture_from_json(s, root, raw, source="session")
+    n, dropped = sm.capture_from_json(s, root, raw, source="session")
     digest.write_digest(s)
-    print(f"[+] captured {n} mem  (branch {gitmeta.current_branch(root)}); digest updated")
+    note = f"; {dropped} dropped as noise" if dropped else ""
+    print(f"[+] captured {n} mem{note}  (branch {gitmeta.current_branch(root)}); digest updated")
     return 0
 
 
@@ -125,7 +126,7 @@ def cmd_build(args):
         try:
             ctx = context.gather(root)
             items = llm.extract_memories(sm.BUILD_PROMPT, ctx)
-            ai_added = sm.remember_many(s, root, items, source="ai-build")
+            ai_added, _dropped = sm.remember_many(s, root, items, source="ai-build")
             print(f"[+] AI wrote {ai_added} facts from the codebase")
             from . import artifacts
             for p in artifacts.generate_all(s, root):
@@ -484,7 +485,7 @@ def _run_hook(args):
     if args.event == "capture":                # SessionEnd/Stop → extract + store
         text = _read_transcript(data.get("transcript_path"))
         if text:
-            n = sm.capture_from_json(s, root, text, source="session")
+            n, dropped = sm.capture_from_json(s, root, text, source="session")
             # citation feedback: lift memories the agent actually cited [id]
             ids = {r["id"] for r in s.db.execute(
                 "SELECT id FROM memory WHERE status='active'")}
@@ -495,7 +496,8 @@ def _run_hook(args):
                 agentsmd.write(s, root)
             except Exception:  # noqa: BLE001
                 pass
-            print(f"omni-memory: captured {n} memories, +{bumped} citations",
+            note = f", {dropped} dropped as noise" if dropped else ""
+            print(f"omni-memory: captured {n} memories{note}, +{bumped} citations",
                   file=sys.stderr)
         return 0
     return 0
@@ -580,6 +582,24 @@ def cmd_bind(args):
     return install.bind(ide=args.ide or "auto")
 
 
+def _plugin_hooks_present() -> bool:
+    """Are OmniMemory's hooks wired via the installed Claude Code plugin? The
+    plugin ships its own hooks.json (SessionStart/UserPromptSubmit/SessionEnd),
+    which lives under ~/.claude/plugins/ — the project's .claude/settings.json is
+    never touched, so a project-only grep misses it (the 'hooks not installed'
+    false alarm)."""
+    base = Path.home() / ".claude" / "plugins"
+    if not base.exists():
+        return False
+    try:
+        for p in base.rglob("hooks.json"):
+            if "omni_memory hook" in p.read_text(encoding="utf-8", errors="ignore"):
+                return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def cmd_doctor(args):
     """`doctor` — diagnose the setup: git, store, layer state, tree-sitter, code
     graph, memory counts, AGENTS.md, hooks, and AI provider. Each line says how to
@@ -600,10 +620,14 @@ def cmd_doctor(args):
     line(s.get_meta("enabled", True), "memory layer", "ON" if s.get_meta("enabled", True) else "OFF",
          "run `omni-memory on`")
     ts = extract.available()
-    line(True if ts else None, "tree-sitter", "installed (multi-language graph)" if ts
-         else "absent — Python-only via stdlib ast", "pip install omni-memory-agent on Python ≥3.10")
-    nodes = len(s.code_graph()[0])
-    line(nodes > 0, "code graph", f"{nodes} symbols", "run `omni-memory map`")
+    line(True if ts else None, "tree-sitter", "installed (exact multi-language graph)" if ts
+         else "absent — stdlib backend (Python via ast, JS/TS via regex; approximate)",
+         "pip install omni-memory-agent on Python ≥3.10 for the exact graph")
+    all_nodes = s.code_graph()[0]
+    funcs = sum(1 for n in all_nodes if n["kind"] != "file")
+    files = len(all_nodes) - funcs
+    line(funcs > 0, "code graph", f"{funcs} symbols ({files} files)",
+         "run `omni-memory map`; non-Python needs tree-sitter or the regex backend")
     c = s.counts()
     active = c.get("active", 0)
     stale = s.db.execute("SELECT COUNT(*) n FROM memory WHERE status='active' AND stale=1").fetchone()["n"]
@@ -613,9 +637,15 @@ def cmd_doctor(args):
     line(agents, "AGENTS.md", "present (cross-IDE context)" if agents else "missing",
          "run `omni-memory bind`")
     settings = root / ".claude" / "settings.json"
-    hooked = settings.exists() and "omni_memory hook" in settings.read_text(encoding="utf-8", errors="ignore")
-    line(hooked, "Claude Code hooks", "wired" if hooked else "not installed",
-         "run `omni-memory bind claude-code`")
+    proj_hooked = settings.exists() and "omni_memory hook" in settings.read_text(
+        encoding="utf-8", errors="ignore")
+    if proj_hooked:
+        line(True, "Claude Code hooks", "wired (project settings)")
+    elif _plugin_hooks_present():
+        line(True, "Claude Code hooks", "wired (marketplace plugin)")
+    else:
+        line(False, "Claude Code hooks", "not installed",
+             "run `omni-memory bind claude-code`, or install the plugin")
     prov = llm.provider()
     line(True if prov else None, "AI provider", prov or "none (headless capture off)",
          "set GEMINI_API_KEY / ANTHROPIC_API_KEY for headless capture")

@@ -21,8 +21,9 @@ pip install omni-memory-agent
 ```
 
 The core is **zero-dependency** (Python stdlib + SQLite) and runs with **no API key**.
-On Python ≥3.10 it auto-installs tree-sitter for the multi-language code graph; on 3.9
-it still works and graphs Python via `ast`.
+On Python ≥3.10 it auto-installs tree-sitter for the exact multi-language code graph.
+Without it (e.g. the plugin, or Python 3.9) a stdlib backend still graphs Python (`ast`)
+and JS/TS (regex) — approximate, but real.
 
 ## Quick start — two steps people mix up
 

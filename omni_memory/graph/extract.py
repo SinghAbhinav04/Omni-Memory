@@ -21,6 +21,8 @@ Symbol id scheme:  "<relpath>"            for a file
 """
 from __future__ import annotations
 import ast
+import bisect
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -129,10 +131,21 @@ def extract_file(path: Path, root: Path) -> Optional[dict]:
         try:
             return _extract_treesitter(rel, src, lang)
         except Exception:  # noqa: BLE001
-            pass  # fall through to ast for python; else give an empty file node
+            pass  # fall through to a stdlib backend below
     if lang == "python":
         return _extract_python_ast(rel, src)
+    if lang in _JS_LANGS:                          # dependency-free JS/TS graph
+        try:
+            return _extract_js_regex(rel, src)
+        except Exception:  # noqa: BLE001
+            pass
     return _empty(rel, src.count("\n") + 1)
+
+
+# Languages the stdlib regex backend handles when tree-sitter isn't installed
+# (so the Claude Code plugin, which can't pip-install anything, still graphs a
+# TS/JS repo — approximately; tree-sitter via pip is exact).
+_JS_LANGS = {"javascript", "typescript", "tsx"}
 
 
 # In-process cache of per-file extracts, keyed by absolute path → (mtime_ns,
@@ -169,7 +182,7 @@ def extract_repo(root: Path, max_files: int = 5000, incremental: bool = True) ->
     With `incremental` (default), unchanged files are served from the parse cache
     so only edited files are re-parsed — the watcher stays cheap on big repos."""
     out = {"symbols": [], "calls": [], "imports": [], "bases": [],
-           "backend": "tree-sitter" if available() else "ast",
+           "backend": "tree-sitter" if available() else "stdlib (ast + regex-js)",
            "files_parsed": 0, "reparsed": 0}
     n = 0
     seen: set = set()
@@ -318,6 +331,175 @@ def _extract_python_ast(rel: str, src: str) -> dict:
                                              "names": [a.name for a in sub.names]})
 
     visit(tree, file_id, [], False)
+    return r
+
+
+# ── stdlib regex backend (JS/TS/TSX, zero-dep, APPROXIMATE) ─────────────────
+# So the Claude Code plugin (which can't pip-install tree-sitter) still gets a
+# real code graph on a TypeScript/JavaScript repo. It's heuristic — arrow bodies
+# without braces, decorators, and exotic syntax are imperfect. `pip install
+# omni-memory-agent` (tree-sitter, Python >=3.10) is the exact path.
+_JS_NOISE = re.compile(
+    r"/\*.*?\*/|//[^\n]*|'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"|`(?:\\.|[^`\\])*`",
+    re.S)
+_JS_CLASS = re.compile(
+    r"\b(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)"
+    r"(?:\s+extends\s+([A-Za-z_$][\w$.]*))?")
+_JS_FUNC = re.compile(
+    r"\b(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*"
+    r"([A-Za-z_$][\w$]*)\s*(\([^)]*\))")
+_JS_ARROW = re.compile(
+    r"\b(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*"
+    r"(?:async\s+)?(\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>")
+_JS_FUNCEXPR = re.compile(
+    r"\b(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+    r"(?:async\s+)?function\b\s*(\([^)]*\))?")
+_JS_METHOD = re.compile(
+    r"^[ \t]*(?:public|private|protected|static|readonly|abstract|override|async|get|set)?"
+    r"[ \t]*(?:public|private|protected|static|readonly|abstract|override|async|get|set)?"
+    r"[ \t]*([A-Za-z_$][\w$]*)[ \t]*(\([^;{]*\))[ \t]*(?::[^={;]+)?(?=\{)", re.M)
+_JS_CALL = re.compile(r"([A-Za-z_$][\w$]*)\s*\(")
+_JS_THROW = re.compile(r"\bthrow\s+(?:new\s+)?([A-Za-z_$][\w$]*)")
+_JS_KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "function",
+                "await", "typeof", "new", "in", "of", "do", "else", "case",
+                "super", "constructor", "require", "import", "class", "yield",
+                "throw", "delete", "void", "with", "as"}
+
+
+def _js_blank(src: str) -> str:
+    """Replace comments/strings with spaces (keeping newlines) so brace matching
+    and declaration detection don't trip on braces inside them."""
+    return _JS_NOISE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), src)
+
+
+def _first_comment_above(src_lines: list, start_line: int) -> str:
+    """A one-line doc from the comment directly above a declaration (best-effort)."""
+    j = start_line - 2                      # line above, 0-indexed
+    while j >= 0 and not src_lines[j].strip():
+        j -= 1
+    if j < 0:
+        return ""
+    ln = src_lines[j].strip().lstrip("/* \t")
+    return _first_line(ln) if ln and (src_lines[j].strip().startswith(("//", "*", "/*"))) else ""
+
+
+def _extract_js_regex(rel: str, src: str) -> dict:
+    r = _empty(rel, src.count("\n") + 1)
+    clean = _js_blank(src)
+    src_lines = src.split("\n")
+    offsets = [0] + [i + 1 for i, ch in enumerate(clean) if ch == "\n"]
+
+    def line_of(idx: int) -> int:
+        return bisect.bisect_right(offsets, idx)
+
+    def close_brace(open_idx: int) -> int:
+        d, i, n = 0, open_idx, len(clean)
+        while i < n:
+            if clean[i] == "{":
+                d += 1
+            elif clean[i] == "}":
+                d -= 1
+                if d == 0:
+                    return i
+            i += 1
+        return n - 1
+
+    def next_brace(after: int, limit_line: int) -> int:
+        # the '{' that opens this decl's body, if it's within a couple of lines
+        i, n = after, len(clean)
+        while i < n and line_of(i) <= limit_line + 2:
+            if clean[i] == "{":
+                return i
+            if clean[i] == ";":
+                return -1
+            i += 1
+        return -1
+
+    syms = []   # (start_idx, end_idx, dict)
+
+    def add_sym(name, kind, decl_idx, params, has_body_at):
+        sl = line_of(decl_idx)
+        ob = next_brace(has_body_at, sl)
+        if ob == -1:                        # no brace body (e.g. `const f = () => x`)
+            start_idx, end_idx, el = decl_idx, has_body_at, sl
+        else:
+            start_idx, cb = decl_idx, close_brace(ob)
+            end_idx, el = cb, line_of(cb)
+        sig = params if params else "()"
+        raises = []
+        body = clean[start_idx:end_idx + 1]
+        for tm in _JS_THROW.finditer(body):
+            if tm.group(1) not in raises:
+                raises.append(tm.group(1))
+        syms.append((start_idx, end_idx, {
+            "kind": kind, "name": name, "file": rel,
+            "line_start": sl, "line_end": el, "signature": sig[:200],
+            "doc": _first_comment_above(src_lines, sl), "raises": raises}))
+
+    for m in _JS_CLASS.finditer(clean):
+        add_sym(m.group(1), "class", m.start(), "()", m.end())
+        if m.group(2):
+            r["bases"].append({"cls": None, "name": m.group(2).split(".")[-1],
+                               "_clsname": m.group(1)})
+    for m in _JS_FUNC.finditer(clean):
+        add_sym(m.group(1), "function", m.start(), m.group(2), m.end())
+    for m in _JS_ARROW.finditer(clean):
+        add_sym(m.group(1), "function", m.start(),
+                m.group(2) if m.group(2).startswith("(") else "()", m.end())
+    for m in _JS_FUNCEXPR.finditer(clean):
+        add_sym(m.group(1), "function", m.start(), m.group(2) or "()", m.end())
+    for m in _JS_METHOD.finditer(clean):
+        if m.group(1) not in _JS_KEYWORDS:
+            add_sym(m.group(1), "method", m.start(1), m.group(2), m.end())
+
+    # dedup by (name, start_line): the same decl can hit two patterns
+    seen, uniq = set(), []
+    for s in syms:
+        key = (s[2]["name"], s[2]["line_start"])
+        if key not in seen:
+            seen.add(key)
+            uniq.append(s)
+    syms = sorted(uniq, key=lambda s: (s[0], -(s[1])))
+
+    # assign ids + parent by innermost containment
+    def parent_of(start_idx):
+        best = None
+        for st, en, d in syms:
+            if st < start_idx <= en and (best is None or st > best[0]):
+                best = (st, en, d)
+        return best
+
+    ids = {}
+    for st, en, d in syms:
+        p = parent_of(st)
+        pid = ids.get((p[0], p[2]["name"])) if p else None
+        qual = (p[2]["name"] + "." + d["name"]) if p else d["name"]
+        sid = f"{rel}::{qual}"
+        ids[(st, d["name"])] = sid
+        d["id"], d["parent"] = sid, (pid or rel)
+        d.setdefault("calls", [])
+        r["symbols"].append(d)
+        if d["kind"] == "class":
+            for b in r["bases"]:
+                if b.get("_clsname") == d["name"]:
+                    b["cls"] = sid
+
+    r["bases"] = [{"cls": b["cls"], "name": b["name"]}
+                  for b in r["bases"] if b.get("cls")]
+
+    # calls → attribute each to the innermost enclosing symbol
+    for m in _JS_CALL.finditer(clean):
+        name = m.group(1)
+        if name in _JS_KEYWORDS:
+            continue
+        idx = m.start(1)
+        inner = None
+        for st, en, d in syms:
+            if st <= idx <= en and (inner is None or st > inner[0]):
+                inner = (st, en, d)
+        if inner:
+            r["calls"].append({"src": inner[2]["id"], "name": name,
+                               "line": line_of(idx)})
     return r
 
 

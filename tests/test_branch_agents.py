@@ -40,6 +40,29 @@ def test_classify_marks_abandoned(store, repo):
     assert row and row["status"] == "abandoned"
 
 
+def test_squash_merge_detected(tmp_path):
+    """A squash-merged branch (no merge commit) must be recognised as merged —
+    `git branch --merged` misses it, `git cherry` catches it."""
+    import subprocess
+    d = tmp_path / "r"
+    d.mkdir()
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(d), *a], check=True, capture_output=True)
+    git("init", "-q", "-b", "main"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (d / "a.txt").write_text("base\n"); git("add", "-A"); git("commit", "-qm", "base")
+    git("checkout", "-q", "-b", "feature")
+    (d / "b.txt").write_text("work\n"); git("add", "-A"); git("commit", "-qm", "feat")
+    git("checkout", "-q", "main")
+    git("merge", "--squash", "feature"); git("commit", "-qm", "squash feat")
+    (d / "c.txt").write_text("more\n"); git("add", "-A"); git("commit", "-qm", "more")
+
+    assert "feature" not in gitmeta.merged_branches(d, "main")   # --merged can't see it
+    assert gitmeta.is_squash_merged(d, "feature", "main")        # cherry can
+    feat = next(b for b in gitmeta.snapshot(d)["branches"] if b["name"] == "feature")
+    assert feat["status"] == "merged" and feat["into_branch"] == "main"
+
+
 def test_refresh_if_stale_skips_when_unchanged(store, repo):
     assert branchmod.refresh_if_stale(store, repo) is True   # cold → build
     assert branchmod.refresh_if_stale(store, repo) is False  # unchanged → skip
