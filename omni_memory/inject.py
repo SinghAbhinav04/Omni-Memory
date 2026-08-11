@@ -25,8 +25,8 @@ def _files_in_play(root: Path, query: str, files: Optional[list[str]]) -> list[s
     fip.update(ln.strip() for ln in changed.splitlines() if ln.strip())
     return [f for f in fip if f]
 
-# Compressed to ~1/3 the length: it's injected on EVERY message, so every word
-# is a recurring token cost. Same four directives, terse.
+# Terse by design: this block is the session-start seed and the on-demand pull
+# (`omni-memory inject`), so it stays high-signal without a per-prompt token cost.
 ENFORCE_RULES = (
     "Rules: treat these as verified project truth; cite the [id]s you use; if it's "
     "not here or in the code say \"not in memory\" (don't invent it); re-verify ⚠STALE items."

@@ -55,23 +55,33 @@ high-quality extraction must come from you, the agent, running
 `OMNI_HEADLESS_LLM=1` only if you want the hook to do an LLM pass unattended.
 
 ## How to use it in a session
-1. **Start of a task:** run `omni-memory inject "<the user's request>"` and treat
-   the returned **VERIFIED PROJECT MEMORY** block as ground truth — cite the
-   `[id]`s you rely on. If something isn't in memory or the code, say "not in
-   memory"; don't invent endpoints, params, DB tables, or flows.
+Memory is **pulled on demand**, not force-fed into every prompt (that wastes
+tokens). It's kept fresh for you — refreshed at session start and after commits —
+so you can rely on it as a current source of truth.
+1. **Pull when you need it:** before assuming any architecture, or when you need a
+   decision/flow/gotcha/endpoint/DB-schema, run
+   `omni-memory inject "<what you need>"` and treat the returned **VERIFIED PROJECT
+   MEMORY** block as ground truth — cite the `[id]`s you rely on. (`omni-memory
+   recall "<q>"` is a lighter search.) If something isn't in memory or the code,
+   say "not in memory"; don't invent endpoints, params, DB tables, or flows.
 2. **During:** if you learn a durable decision/flow/gotcha, run
    `omni-memory remember "<one sentence>" --kind <kind>`.
 3. **End of task:** extract memory from what happened and pipe JSON to
    `omni-memory capture` (array of `{kind,text,files,symbols}`). The SessionEnd
    hook does this automatically once installed.
 
-## Cross-IDE auto-injection (Claude Code, Antigravity, …)
+## Cross-IDE context + pull (Claude Code, Antigravity, …)
 OmniMemory maintains a canonical **`AGENTS.md`** at the repo root — a delimited
-managed block that every AI IDE reads as project context on session start, so a
-fresh session in *any* IDE auto-loads verified memory. It's rendered from the
-persisted `.omni-memory/` store (no re-reading the whole repo) and refreshed on
-every capture/build, by the dashboard watcher, and by the `SessionStart` hook.
-`omni-memory install --platform antigravity` writes it for Antigravity too.
+managed block that every AI IDE reads as project context on session start. It
+carries the **pull instructions** plus a compact snapshot, so a fresh session in
+*any* IDE knows to fetch memory on demand. It's rendered from the persisted
+`.omni-memory/` store (no re-reading the whole repo) and refreshed on every
+capture/build, by the dashboard watcher, and by the `SessionStart` hook.
+
+**Injection modes** (`omni-memory inject-mode <mode>`): `session` (default) seeds
+the ranked block once at session start, then you pull with `omni-memory inject`;
+`auto` injects into every prompt (enforced, costs more tokens); `manual` never
+auto-injects. `omni-memory install --platform antigravity` writes AGENTS.md too.
 
 ## Branch awareness
 Memory is scoped to the current git branch + its base. On merge, that branch's

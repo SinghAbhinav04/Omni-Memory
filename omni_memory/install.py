@@ -165,10 +165,11 @@ def _install_claude_code() -> int:
         hooks[event] = existing + val
     settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"[+] hooks written → {settings}")
-    print("    SessionStart     → refreshes + seeds verified memory (incremental)")
-    print("    UserPromptSubmit → injects verified memory (enforced)")
+    print("    SessionStart     → refreshes + seeds verified memory once (then pull on demand)")
+    print("    UserPromptSubmit → pull mode: agent fetches memory itself (no per-prompt cost)")
     print("    PreCompact       → captures before compaction (nothing lost mid-session)")
     print("    SessionEnd       → captures the session (via your agent, no key)")
+    print("    (memory access: `omni-memory inject \"<q>\"`; switch with `omni-memory inject-mode`)")
     _write_agents_md(proj)
     print("\n[+] Restart Claude Code in this project. Then just work — memory")
     print("    injects every prompt and updates itself when the session ends.")

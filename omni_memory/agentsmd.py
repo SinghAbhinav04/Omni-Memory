@@ -41,13 +41,19 @@ def render_block(store: Store, root: Path) -> str:
         f"_Auto-generated {time.strftime('%Y-%m-%d %H:%M')} · {len(mems)} verified "
         f"memories · default branch `{default}`._",
         "",
-        "This project has a persistent, branch-aware memory layer. **Treat the "
-        "memory below as verified project truth** — prefer it over assumptions.",
+        "This project has a persistent, branch-aware memory layer that stays fresh "
+        "automatically (rebuilt at session start and after commits). **It is a "
+        "reliable source of truth — pull it instead of guessing.** It is NOT "
+        "force-fed into every prompt (that wastes tokens); fetch it when relevant.",
         "",
-        "- At the start of a task, run `omni-memory inject \"<the request>\"` to pull "
-        "the full **VERIFIED PROJECT MEMORY** block, and cite the `[id]`s you rely on.",
-        "- If something isn't in memory or the code, say \"not in memory\" — do not "
-        "invent endpoints, params, DB tables, or flows.",
+        "- **Pull on demand:** before assuming any architecture — or when you need a "
+        "decision, flow, gotcha, endpoint, or DB schema — run "
+        "`omni-memory inject \"<what you need>\"` for the ranked **VERIFIED PROJECT "
+        "MEMORY** block, and cite the `[id]`s you rely on. (`omni-memory recall "
+        "\"<q>\"` is a lighter search.)",
+        "- The snapshot below orients you; treat it and pulled memory as verified "
+        "truth. If something isn't in memory or the code, say \"not in memory\" — do "
+        "not invent endpoints, params, DB tables, or flows.",
         "- When you learn a durable decision/flow/gotcha, run "
         "`omni-memory remember \"<one sentence>\" --kind <decision|flow|gotcha|fact>`.",
         "- Full knowledge base: `.omni-memory/MEMORY.md` · dashboard: `omni-memory ui`.",

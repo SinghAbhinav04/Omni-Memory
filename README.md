@@ -57,8 +57,11 @@ session ends.
   the end of each session, and on demand.
 - **Branch-aware** — memory is scoped to your git branch; tracks branch creator,
   timeline, and merge status. Merged branches roll into the base.
-- **Enforced** — injects a *VERIFIED PROJECT MEMORY* block into prompts and makes
-  the agent cite what it used, or admit "not in memory" instead of inventing.
+- **Pull-based (token-light)** — memory isn't force-fed into every prompt. It's
+  seeded once at session start and the agent *pulls* it on demand
+  (`omni-memory inject "<q>"`) as verified ground truth — cite `[id]`s or admit
+  "not in memory". Kept fresh (session start + after commits) so it's reliable.
+  Prefer per-prompt enforcement? `omni-memory inject-mode auto`.
 - **Relevant (context-aware)** — a BM25F ranker (symbol/file/prose field
   weighting) surfaces the few memories that match your prompt, boosts those
   anchored to code **near what you're editing** (via the call graph), and lifts
@@ -110,9 +113,10 @@ omni-memory key <gemini|anthropic|openai>    # store a model key for the AI buil
 CAPTURE (session + git) → STORE (SQLite, branch-tagged) → RANK + INJECT + ENFORCE
        → CHECK (staleness vs git) → VISUALIZE (dashboard)
 ```
-Capture fires from deterministic harness events (`UserPromptSubmit` → inject,
-`SessionEnd` → capture) — never left to the agent's goodwill. Local-first, no
-cloud, no paid data. See [`PLAN.md`](PLAN.md) for the full architecture and roadmap.
+Capture fires from deterministic harness events (`PreCompact` + `SessionEnd` →
+capture) — never lost to compaction. Memory is seeded at `SessionStart` and pulled
+on demand thereafter (`inject-mode`: session·auto·manual). Local-first, no cloud,
+no paid data. See [`PLAN.md`](PLAN.md) for the full architecture and roadmap.
 
 ## Status
 Core is in: store · git provenance · branch-aware scoping · capture/inject/enforce

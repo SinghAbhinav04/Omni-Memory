@@ -27,8 +27,10 @@ def cmd_status(args):
     cur = gitmeta.current_branch(root)
     from . import llm
     ai = llm.provider() or "none (set GEMINI_API_KEY)"
+    mode = s.get_meta("inject_mode", "session")
     print(f"OmniMemory {__version__}  ·  project: {root.name}")
-    print(f"  layer: {'ON' if on else 'OFF'}   branch-aware: {'ON' if ba else 'OFF'}   AI: {ai}")
+    print(f"  layer: {'ON' if on else 'OFF'}   branch-aware: {'ON' if ba else 'OFF'}   "
+          f"inject: {mode}   AI: {ai}")
     stale = s.db.execute(
         "SELECT COUNT(*) n FROM memory WHERE status='active' AND stale=1").fetchone()["n"]
     stale_note = f"   ⚠ {stale} stale (run: omni-memory check)" if stale else ""
@@ -52,6 +54,26 @@ def cmd_branch_aware(args):
     new = not s.get_meta("branch_aware", True)
     s.set_meta("branch_aware", new)
     print(f"branch-aware: {'ON' if new else 'OFF'}")
+    return 0
+
+
+def cmd_inject_mode(args):
+    """`inject-mode [auto|session|manual]` — how memory reaches the agent.
+
+      session  seed the ranked block ONCE at session start, then the agent pulls
+               on demand with `omni-memory inject "<q>"` (default — saves tokens,
+               memory stays fresh via the SessionStart refresh).
+      auto     inject relevant memory into every prompt (enforced, higher token cost).
+      manual   never auto-inject, not even at session start — pull only.
+    """
+    s, _ = _store()
+    mode = getattr(args, "mode", None)
+    if mode:
+        if mode not in ("auto", "session", "manual"):
+            print("mode must be one of: auto | session | manual")
+            return 1
+        s.set_meta("inject_mode", mode)
+    print(f"inject-mode: {s.get_meta('inject_mode', 'session')}")
     return 0
 
 
@@ -182,6 +204,7 @@ def cmd_inject(args):
     s, root = _store()
     if not s.get_meta("enabled", True):
         return 0
+    branchmod.refresh_if_stale(s, root)         # a pull always reflects the current code
     block = inject.build_block(s, root, query=" ".join(args.query or []),
                                files=args.file or None)
     if block:
@@ -512,25 +535,28 @@ def _run_hook(args):
     s, root = _store()
     if not s.get_meta("enabled", True):
         return 0
+    mode = s.get_meta("inject_mode", "session")   # session (default) | auto | manual
     if args.event == "start":                  # SessionStart → refresh + ensure AGENTS.md
         _bootstrap_shared(s, root)             # fresh clone → load committed memory
         # Rebuild ONLY if git state changed since last time (the code graph is
         # persisted in SQLite) — so opening a session doesn't re-parse the whole
-        # repo when nothing moved. Memory injected below comes from the store, not
-        # from re-reading files.
+        # repo when nothing moved. Keeping the store fresh here is what lets the
+        # agent PULL memory later and trust it as current.
         branchmod.refresh_if_stale(s, root)
         from . import agentsmd
-        agentsmd.write(s, root)
-        block = inject.build_block(s, root, query="")
-        if block:
-            print(block)                        # seed the session context
-            _mark_injected(s, block)            # so the first prompt won't repeat it
+        agentsmd.write(s, root)                 # durable pull instructions + snapshot
+        if mode != "manual":                    # seed the ranked block ONCE per session
+            block = inject.build_block(s, root, query="")
+            if block:
+                print(block)                    # grounds a cold agent; then it pulls on demand
+                _mark_injected(s, block)
         return 0
-    if args.event == "inject":                 # UserPromptSubmit → add memory to context
+    if args.event == "inject":                 # UserPromptSubmit
+        if mode != "auto":                      # pull mode (default): the agent fetches
+            return 0                            # memory itself via `omni-memory inject` — no
+                                                # per-prompt token cost, memory kept fresh above
         block = inject.build_block(s, root, query=data.get("prompt", ""))
-        # De-dupe: the block already lives in this session's context, so re-emitting
-        # an identical one every prompt just compounds tokens. Emit only when the
-        # relevant memory CHANGED (or periodically, so it survives compaction).
+        # auto mode only: de-dupe so an identical block isn't re-emitted every prompt.
         if block and _should_inject(s, block):
             print(block)                        # stdout is added to the prompt context
         return 0
@@ -750,6 +776,8 @@ def main(argv=None):
 
     sub.add_parser("status")
     sub.add_parser("on"); sub.add_parser("off")
+    im = sub.add_parser("inject-mode")
+    im.add_argument("mode", nargs="?", choices=["auto", "session", "manual"])
     sub.add_parser("branch-aware")
     r = sub.add_parser("remember"); r.add_argument("--kind", default="fact")
     r.add_argument("--global", dest="glob", action="store_true", help="store in the shared ~/.omni-memory (injects everywhere)")
@@ -805,7 +833,8 @@ def main(argv=None):
     dispatch = {
         None: cmd_status, "status": cmd_status, "on": cmd_toggle, "off": cmd_toggle,
         "branch-aware": cmd_branch_aware, "remember": cmd_remember, "capture": cmd_capture,
-        "inject": cmd_inject, "recall": cmd_recall, "branches": cmd_branches,
+        "inject": cmd_inject, "inject-mode": cmd_inject_mode,
+        "recall": cmd_recall, "branches": cmd_branches,
         "forget": cmd_forget, "used": cmd_used, "gc": cmd_gc, "restore": cmd_restore,
         "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
