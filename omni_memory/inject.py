@@ -95,6 +95,18 @@ def build_block(store: Store, root: Path, query: str = "",
             pass
     if not mems:
         return ""
+    # chain-complete: a decision and its gotcha/constraint on the same symbol must
+    # travel together — a partial causal chain is close to useless. Pull co-anchored
+    # siblings for the top picks (bounded) so ranking can't fragment a chain.
+    if store.get_meta("chain_complete", True):
+        seen = {m["id"] for m in mems}
+        chained = []
+        for m in mems[:5]:
+            for sib in store.linked_memories(m, seen, limit=2):
+                seen.add(sib["id"])
+                sib["_chain"] = True
+                chained.append(sib)
+        mems = mems + chained
     scope_label = "all branches" if cur == "*" else (
         f"branch '{cur}'" + (f" + base '{base}'" if base else ""))
     lines = [
@@ -119,13 +131,15 @@ def build_block(store: Store, root: Path, query: str = "",
         else:
             br = "" if cur != "*" else f" ({m['branch']})"
         stale = " ⚠STALE" if m.get("stale") else ""
+        lock = " 🔒" if m.get("protected") else ""
         # evidence: how it was learned. ✓ = confirmed by outcome (trust it);
         # ~ = inferred/unconfirmed (weigh lightly). stated → no marker.
         ev = {"verified": " ✓", "inferred": " ~"}.get(m.get("evidence"), "")
         if m.get("evidence") == "inferred":
             has_inferred = True
+        chain = "↳ " if m.get("_chain") else ""   # a linked chain member of a pick above
         text = _clip(m["text"], _TEXT_CAP)
-        line = f"{tag}{ev} {m['kind']}{br}{stale}: {text}{where}"
+        line = f"{chain}{tag}{ev}{lock} {m['kind']}{br}{stale}: {text}{where}"
         if used and budget - len(line) < 0:   # keep at least one; then honor budget
             break
         lines.append(line)

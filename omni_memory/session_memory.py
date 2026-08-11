@@ -123,8 +123,10 @@ def capture_from_json(store: Store, root: Path, raw: str,
                 source = "ai-session"
             except Exception:  # noqa: BLE001
                 items = _heuristic_extract(raw)
+                source = "heuristic"                # noisy scanner → strict filter
         else:                                       # free: no `claude -p` on autopilot
             items = _heuristic_extract(raw)
+            source = "heuristic"                    # require a concrete anchor
     return remember_many(store, root, items, source=source)
 
 

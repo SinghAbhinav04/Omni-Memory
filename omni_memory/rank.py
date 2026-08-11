@@ -37,9 +37,10 @@ _USE_W = 0.30               # how much citation history lifts a memory
 _HALF_LIFE_DAYS = 45.0
 
 _KIND_WEIGHT = {
-    "decision": 1.25, "gotcha": 1.2, "event": 1.15, "endpoint": 1.15,
-    "db": 1.1, "flow": 1.1, "component": 1.05, "concept": 1.05,
-    "fact": 1.0, "todo": 0.9, "assumption": 0.8,
+    # corrections and user identity are the highest-value, least-grep-able memory
+    "feedback": 1.35, "decision": 1.25, "gotcha": 1.2, "user": 1.2,
+    "event": 1.15, "endpoint": 1.15, "db": 1.1, "flow": 1.1,
+    "component": 1.05, "concept": 1.05, "fact": 1.0, "todo": 0.9, "assumption": 0.8,
 }
 
 _STOP = frozenset(
@@ -136,9 +137,14 @@ def score_one(m: dict, terms: list[str], idf: dict, joined: str,
     if graph:
         score += _GRAPH_BOOST * graph
 
-    age_days = max(0.0, (now - float(m.get("updated") or now)) / 86400.0)
-    recency = 0.5 ** (age_days / _HALF_LIFE_DAYS)
-    score *= (0.6 + 0.4 * recency)
+    # protected ("constitutional") memory doesn't age and gets a standing lift so
+    # pinned architecture/identity/rules stay surfaced regardless of recency.
+    if m.get("protected"):
+        score *= 1.3
+    else:
+        age_days = max(0.0, (now - float(m.get("updated") or now)) / 86400.0)
+        recency = 0.5 ** (age_days / _HALF_LIFE_DAYS)
+        score *= (0.6 + 0.4 * recency)
     score *= _KIND_WEIGHT.get(m.get("kind", "fact"), 1.0)
     score *= 0.5 + 0.5 * float(m.get("confidence") or 0.8)
     score *= 1.0 + _USE_W * math.log(1 + (m.get("uses") or 0))  # citation feedback

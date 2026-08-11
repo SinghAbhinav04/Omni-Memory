@@ -49,9 +49,35 @@ _BOILERPLATE = re.compile(
     re.I,
 )
 
+# Conversational / thread noise — a pasted chat log, GitHub issue comment, forum
+# reply, or PR discussion is not project memory. These are rejected across ALL
+# sources: the heuristic transcript scanner happily turns discussion chatter into
+# "facts" (an issue thread became dozens of junk memories), and even an LLM can be
+# fooled into extracting a quoted comment as a decision.
+_CHAT = re.compile(
+    r"^@\w+"                                          # opens with a mention (a reply)
+    r"|@\w+\s+(commented|said|wrote|replied|asked|mentioned)"
+    r"|\b(commented|replied|posted|wrote)\b.{0,24}\b(ago|on \w+ \d)"
+    r"|\b\d+\s*(h|hr|hrs|hours?|d|days?|mo|months?|w|weeks?|min|minutes?)\s+ago\b"
+    r"|github\.com/\S+/(issues|pull|discussions)"
+    r"|\bdrafted by\b|\bposted with\b|review and approval"
+    r"|^https?://\S+$"                                # a bare link
+    r"|^>\s",                                         # a quoted reply line
+    re.I,
+)
+_MENTION = re.compile(r"(?:^|\s)@[\w-]+")             # @handle (not pkg like @scope/pkg mid-word)
+
 
 def _has_anchor(text: str) -> bool:
     return any(rx.search(text) for rx in _ANCHORS)
+
+
+def _is_chatter(t: str) -> bool:
+    """Structural markers of a conversation/thread rather than a project fact."""
+    if _CHAT.search(t):
+        return True
+    # two or more @handles reads like a thread reply, not a fact naming one package
+    return len(_MENTION.findall(t)) >= 2
 
 
 def is_noise(text: str, files=None, symbols=None, source: str = "session") -> bool:
@@ -65,6 +91,8 @@ def is_noise(text: str, files=None, symbols=None, source: str = "session") -> bo
     if t.endswith("?"):                       # questions aren't durable facts
         return True
     if _BOILERPLATE.match(t):
+        return True
+    if _is_chatter(t):                        # pasted thread / issue-comment noise
         return True
     if source not in _STRICT_SOURCES:
         return False                          # trust AI/manual/session prose

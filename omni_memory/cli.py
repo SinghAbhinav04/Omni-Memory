@@ -94,9 +94,23 @@ def cmd_remember(args):
     s, root = _store()
     m = sm.remember(s, root, " ".join(args.text), kind=args.kind, source="manual",
                     evidence=evidence)
+    if getattr(args, "lock", False):
+        s.set_protected(m.id, True)             # constitutional — never decays/evicts
     digest.write_digest(s)
-    print(f"[+] remembered [{m.id}] ({m.kind} · {evidence}, branch {m.branch}): {m.text}")
+    lock = " · 🔒 protected" if getattr(args, "lock", False) else ""
+    print(f"[+] remembered [{m.id}] ({m.kind} · {evidence}{lock}, branch {m.branch}): {m.text}")
     return 0
+
+
+def cmd_lock(args):
+    """`lock <id>` / `unlock <id>` — pin a memory as constitutional (never decays
+    or gets evicted) or release it. For architecture, identity, and standing rules."""
+    s, _ = _store()
+    on = args.cmd == "lock"
+    ok = s.set_protected(args.id, on)
+    print(f"[+] {'🔒 locked' if on else 'unlocked'} [{args.id}]" if ok
+          else f"no memory with id {args.id}")
+    return 0 if ok else 1
 
 
 def cmd_capture(args):
@@ -546,6 +560,11 @@ def _run_hook(args):
         from . import agentsmd
         agentsmd.write(s, root)                 # durable pull instructions + snapshot
         if mode != "manual":                    # seed the ranked block ONCE per session
+            evs = s.recent_events(3)            # cross-session event bus: what changed lately
+            if evs:
+                print("=== RECENT ACTIVITY (prior sessions) ===")
+                for e in evs:
+                    print(f"· {e['summary']} — branch {e['branch']}")
             block = inject.build_block(s, root, query="")
             if block:
                 print(block)                    # grounds a cold agent; then it pulls on demand
@@ -585,6 +604,9 @@ def _run_hook(args):
             note = f", {dropped} dropped as noise" if dropped else ""
             print(f"omni-memory: captured {n} memories{note}, +{bumped} citations "
                   f"({args.event})", file=sys.stderr)
+            if n:                               # cross-session event bus entry
+                s.add_event(gitmeta.current_branch(root),
+                            f"captured {n} memories" + (f" (+{bumped} cited)" if bumped else ""))
         if tpath:                               # advance the offset even if nothing new
             offsets[tpath] = total
             s.set_meta("capture_offsets", offsets)
@@ -607,10 +629,14 @@ def cmd_gc(args):
     s, root = _store()
     sw = eviction.sweep(s, root, dry_run=args.dry_run, purge=args.purge)
     verb = "would quarantine" if args.dry_run else "quarantined"
-    print(f"[+] {verb} {len(sw['quarantined'])} memory")
+    noise = sw.get("noise", [])
+    print(f"[+] {verb} {len(sw['quarantined'])} memory"
+          + (f" + {len(noise)} conversational/thread noise" if noise else ""))
     for c in sw["quarantined"][:30]:
         print(f"    ⊘ [{c['id']}] {c['branch']} · {c['reason']} "
               f"(score {c['score']}): {c['text']}")
+    for c in noise[:30]:
+        print(f"    ⊘ [{c['id']}] {c['branch']} · noise: {c['text']}")
     if args.purge:
         print(f"[+] purged {len(sw['purged'])} long-quarantined uncited memory")
     elif sw["purgeable"]:
@@ -727,10 +753,11 @@ def cmd_doctor(args):
         rec = staleness.reconcile(s, root)
         if rec["anchored"]:
             ref, loc = int(rec["refetch_coverage"] * 100), int(rec["locator_coverage"] * 100)
+            enum = int(rec["source_enumeration_coverage"] * 100)
             detail = (f"{ref}% of {rec['anchored']} anchored memories verified re-fetchable "
                       f"({rec['fresh']} fresh, {rec['drifted']} drifted, "
                       f"{rec['orphaned']} orphaned, {rec['uncheckable']} unverifiable); "
-                      f"{loc}% carry a content key")
+                      f"{loc}% carry a content key; {enum}% deletion-detectable")
             clean = not (rec["orphaned"] or rec["uncheckable"])
             line(True if clean else None, "source integrity", detail,
                  "orphans flagged stale (`omni-memory gc`); re-capture legacy memory to add content keys")
@@ -783,7 +810,10 @@ def main(argv=None):
     r.add_argument("--global", dest="glob", action="store_true", help="store in the shared ~/.omni-memory (injects everywhere)")
     r.add_argument("--verified", action="store_true", help="confirmed by outcome (trusted, pruned last)")
     r.add_argument("--inferred", action="store_true", help="guessed from code/context (pruned first)")
+    r.add_argument("--lock", action="store_true", help="protect: never decays or gets evicted")
     r.add_argument("text", nargs="+")
+    lk = sub.add_parser("lock"); lk.add_argument("id")
+    ul = sub.add_parser("unlock"); ul.add_argument("id")
     sub.add_parser("capture")
     ij = sub.add_parser("inject"); ij.add_argument("query", nargs="*"); ij.add_argument("--file", action="append")
     rc = sub.add_parser("recall"); rc.add_argument("query", nargs="+")
@@ -836,6 +866,7 @@ def main(argv=None):
         "inject": cmd_inject, "inject-mode": cmd_inject_mode,
         "recall": cmd_recall, "branches": cmd_branches,
         "forget": cmd_forget, "used": cmd_used, "gc": cmd_gc, "restore": cmd_restore,
+        "lock": cmd_lock, "unlock": cmd_lock,
         "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,

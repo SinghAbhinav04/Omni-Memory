@@ -23,7 +23,8 @@ END = "<!-- OMNI-MEMORY:END -->"
 # many of each to show. Kept small: AGENTS.md is standing context some IDEs load
 # every session, so inlining a lot here is a recurring token cost — the agent can
 # always pull the rest on demand via `omni-memory inject`/`recall`.
-_INLINE = [("decision", 4), ("gotcha", 3), ("flow", 2), ("endpoint", 2)]
+_INLINE = [("user", 2), ("feedback", 3), ("decision", 4), ("gotcha", 3),
+           ("flow", 2), ("endpoint", 2)]
 
 
 def render_block(store: Store, root: Path) -> str:
@@ -66,7 +67,9 @@ def render_block(store: Store, root: Path) -> str:
             continue
         shown = True
         label = {"decision": "Key decisions", "gotcha": "Gotchas",
-                 "flow": "Flows", "endpoint": "API map"}.get(kind, kind.title())
+                 "flow": "Flows", "endpoint": "API map",
+                 "user": "About the user", "feedback": "Corrections to apply"}.get(
+                     kind, kind.title())
         lines.append(f"**{label}**")
         for m in items[:n]:
             where = f" — `{m['files'][0]}`" if m.get("files") else ""

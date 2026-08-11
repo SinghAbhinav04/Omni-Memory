@@ -46,7 +46,10 @@ def store_dir(root: Optional[Path] = None) -> Path:
 # (kafka), endpoint maps (controller→service→repo+params), db schema, reusable
 # components, gotchas/known-issues, unverified assumptions, todos, plain facts.
 KINDS = ("decision", "concept", "flow", "event", "endpoint", "db",
-         "component", "gotcha", "assumption", "todo", "fact")
+         "component", "gotcha", "assumption", "todo", "fact",
+         # who the user is, and corrections they've given — the highest-value,
+         # least-grep-able memory. `feedback` corrections should survive longest.
+         "user", "feedback")
 STATUSES = ("active", "merged", "abandoned", "superseded")
 
 
@@ -75,6 +78,9 @@ class Memory:
     # object is exact deletion. This is what makes staleness re-fetchable, not a
     # heuristic. Populated at capture from `git rev-parse HEAD:<path>`.
     blob_shas: dict = field(default_factory=dict)
+    # Protected ("constitutional") memory — an architectural decision, identity
+    # fact, or standing rule that must never decay or be evicted. Pinned by hand.
+    protected: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d = self.__dict__.copy()
@@ -88,7 +94,9 @@ CREATE TABLE IF NOT EXISTS memory(
   created REAL, updated REAL, status TEXT, confidence REAL,
   source TEXT, supersedes_id TEXT, evidence TEXT DEFAULT 'stated',
   stale INTEGER DEFAULT 0, stale_since REAL, stale_files TEXT,
-  blob_shas TEXT);
+  blob_shas TEXT, protected INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, branch TEXT, summary TEXT);
 CREATE TABLE IF NOT EXISTS branches(
   name TEXT PRIMARY KEY, creator TEXT, created_at REAL, base_branch TEXT,
   ahead INTEGER, behind INTEGER, status TEXT, merged_at REAL,
@@ -171,7 +179,8 @@ class Store:
                           ("uses", "INTEGER DEFAULT 0"), ("last_used", "REAL"),
                           ("quarantined_at", "REAL"), ("quarantine_reason", "TEXT"),
                           ("evidence", "TEXT DEFAULT 'stated'"),
-                          ("blob_shas", "TEXT")):
+                          ("blob_shas", "TEXT"),
+                          ("protected", "INTEGER DEFAULT 0")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE memory ADD COLUMN {col} {decl}")
         cn = {r["name"] for r in self.db.execute("PRAGMA table_info(code_nodes)")}
@@ -203,12 +212,13 @@ class Store:
         self.db.execute(
             "INSERT OR REPLACE INTO memory"
             "(id,branch,kind,text,files,symbols,commit_range,created,updated,"
-            "status,confidence,source,supersedes_id,evidence,blob_shas) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "status,confidence,source,supersedes_id,evidence,blob_shas,protected) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (m.id, m.branch, m.kind, m.text, json.dumps(m.files),
              json.dumps(m.symbols), m.commit_range, m.created, m.updated,
              m.status, m.confidence, m.source, m.supersedes_id,
-             m.evidence, json.dumps(getattr(m, "blob_shas", {}) or {})))
+             m.evidence, json.dumps(getattr(m, "blob_shas", {}) or {}),
+             1 if getattr(m, "protected", False) else 0))
         self.db.commit()
         return m
 
@@ -255,6 +265,50 @@ class Store:
             [(now, i) for i in ids])
         self.db.commit()
         return cur.rowcount
+
+    def set_protected(self, mem_id: str, protected: bool = True) -> bool:
+        """Pin/unpin a memory as constitutional — never decays, never evicted."""
+        cur = self.db.execute("UPDATE memory SET protected=? WHERE id=?",
+                              (1 if protected else 0, mem_id))
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def linked_memories(self, mem: dict, exclude: set, limit: int = 2) -> list[dict]:
+        """Same-branch active memories that share a code anchor (symbol or file)
+        with `mem` — the lightweight dependency chain, so a decision and the
+        gotcha/flow/constraint on the same symbol are retrieved together instead of
+        a top-N slice fragmenting a causal chain (a partial chain is near-useless)."""
+        syms = set(mem.get("symbols") or [])
+        files = set(mem.get("files") or [])
+        if not syms and not files:
+            return []
+        out = []
+        for r in self.db.execute(
+                "SELECT * FROM memory WHERE status='active' AND branch=? AND id!=?",
+                (mem["branch"], mem["id"])):
+            if r["id"] in exclude:
+                continue
+            d = self._row_to_mem(r)
+            if (syms & set(d["symbols"])) or (files & set(d["files"])):
+                out.append(d)
+        _w = {"decision": 3, "gotcha": 3, "feedback": 3, "flow": 2, "endpoint": 2}
+        out.sort(key=lambda m: (m.get("uses") or 0,
+                                1 if m.get("evidence") == "verified" else 0,
+                                _w.get(m["kind"], 0)), reverse=True)
+        return out[:limit]
+
+    # -- event bus (cross-session activity log) -----------------------------
+    def add_event(self, branch: str, summary: str) -> None:
+        """Append a one-line 'what changed this session' to the cross-session log
+        the SessionStart seed reads, so a new session sees recent activity."""
+        self.db.execute("INSERT INTO events(ts,branch,summary) VALUES(?,?,?)",
+                        (time.time(), branch, summary))
+        self.db.commit()
+
+    def recent_events(self, limit: int = 3) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT ts, branch, summary FROM events ORDER BY id DESC LIMIT ?",
+            (limit,)).fetchall()]
 
     def memories(self, branch: Optional[str] = None, base: Optional[str] = None,
                  kinds: Optional[list[str]] = None, files: Optional[list[str]] = None,
@@ -517,6 +571,7 @@ class Store:
         d["stale"] = bool(d.get("stale"))
         d["stale_files"] = json.loads(d.get("stale_files") or "[]")
         d["blob_shas"] = json.loads(d.get("blob_shas") or "{}")
+        d["protected"] = bool(d.get("protected"))
         d["uses"] = d.get("uses") or 0
         return d
 
@@ -592,9 +647,9 @@ class Store:
           graph  → code graph only (code_nodes/code_edges)
         """
         groups = {
-            "memory": ["memory", "flows"],
+            "memory": ["memory", "flows", "events"],
             "graph": ["code_nodes", "code_edges"],
-            "all": ["memory", "flows", "branches", "commits",
+            "all": ["memory", "flows", "events", "branches", "commits",
                     "code_nodes", "code_edges"],
         }
         tables = groups.get(scope, groups["all"])

@@ -32,6 +32,8 @@ _KIND_DECAY = {"assumption": 0.15, "todo": 0.10}
 
 
 def evict_score(m: dict, branch_state: str, now: float) -> float:
+    if m.get("protected"):
+        return 0.0                            # constitutional — never evicted
     score = 0.0
     if branch_state == "abandoned":
         score += 0.6
@@ -74,9 +76,18 @@ def sweep(store: Store, root: Path, dry_run: bool = False,
     now = time.time()
     threshold = float(store.get_meta("quarantine_threshold", QUARANTINE))
 
-    candidates = []
+    from . import cleanup
+    candidates, noise = [], []
     for r in store.db.execute("SELECT * FROM memory WHERE status='active'"):
         m = dict(r)
+        # retro noise: a memory that the (improved) filter now classifies as
+        # conversational/thread junk — e.g. captured from a pasted issue thread —
+        # is quarantined regardless of score, but only if the agent never cited it.
+        if (m.get("uses") or 0) == 0 and not m.get("protected") and cleanup.is_noise(
+                m["text"], m.get("files"), m.get("symbols"), m.get("source") or "session"):
+            noise.append({"id": m["id"], "branch": m["branch"], "reason": "noise",
+                          "text": m["text"][:70]})
+            continue
         st = bstate.get(m["branch"], "active")
         s = evict_score(m, st, now)
         if s >= threshold:
@@ -91,10 +102,12 @@ def sweep(store: Store, root: Path, dry_run: bool = False,
     if not dry_run:
         for c in candidates:
             store.quarantine(c["id"], f"{c['reason']} (score {c['score']})")
+        for c in noise:
+            store.quarantine(c["id"], "extraction noise (conversational/thread)")
     purged = []
     if purge and not dry_run and purgeable:
         purged = [p["id"] for p in purgeable]
         store.delete(purged)
 
-    return {"quarantined": candidates, "purgeable": purgeable, "purged": purged,
-            "dry_run": dry_run}
+    return {"quarantined": candidates, "noise": noise, "purgeable": purgeable,
+            "purged": purged, "dry_run": dry_run}

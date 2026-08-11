@@ -70,8 +70,13 @@ session ends.
   code graph and flags a memory ⚠ stale only when *its* symbol — or a symbol that
   calls it — actually changed in git, not just because the file was touched.
   Falls back to file-level when tree-sitter isn't present.
-- **Clean** — an extraction-noise filter keeps aspirational prose and doc
-  boilerplate out of the store.
+- **Clean** — an extraction-noise filter keeps aspirational prose, doc
+  boilerplate, and pasted chat/issue-thread chatter out of the store (`gc` also
+  retro-sweeps junk already captured).
+- **Chain-complete** — a decision and the gotcha/constraint on the *same symbol*
+  are retrieved together, so a ranked slice never fragments a causal chain.
+- **Protected memory** — `omni-memory lock <id>` (or `remember --lock`) pins
+  architecture/identity/rules as constitutional: never decays, never evicted.
 - **Self-cleaning** — memories stranded on **abandoned branches** (deleted
   unmerged, or long dormant) and long-stale/uncited memories are auto-quarantined
   (reversible), so false memory doesn't live forever. Memories the agent keeps

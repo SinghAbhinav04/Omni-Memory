@@ -95,7 +95,7 @@ def recompute(store: Store, root: Path) -> dict:
 
 _EMPTY_RECONCILE = {"orphaned": 0, "drifted": 0, "fresh": 0, "uncheckable": 0,
                     "anchored": 0, "coverage": 0.0, "locator_coverage": 0.0,
-                    "refetch_coverage": 0.0}
+                    "refetch_coverage": 0.0, "source_enumeration_coverage": 0.0}
 
 
 def _integrity_verdict(root: Path, shas: dict) -> str:
@@ -137,7 +137,7 @@ def reconcile(store: Store, root: Path) -> dict:
     sym_names = {n["name"] for n in store.code_graph()[0]
                  if n["kind"] in ("function", "method", "class")}
     now = time.time()
-    anchored = fresh = drifted = orphaned = uncheckable = with_locator = 0
+    anchored = fresh = drifted = orphaned = uncheckable = with_locator = with_files = 0
     for r in store.db.execute(
             "SELECT id, files, symbols, blob_shas, stale FROM memory "
             "WHERE status='active'"):
@@ -146,6 +146,8 @@ def reconcile(store: Store, root: Path) -> dict:
         if not files and not symbols:
             continue                              # unanchored — can't reconcile
         anchored += 1
+        if files:
+            with_files += 1                       # deletion-enumerable via the git tree
         shas = json.loads(r["blob_shas"] or "{}")
         if shas:                                  # exact, content-identity path
             with_locator += 1
@@ -173,10 +175,16 @@ def reconcile(store: Store, root: Path) -> dict:
     # or vanish. Legacy 'uncheckable' memories count toward neither.
     loc = (with_locator / anchored) if anchored else 0.0
     ref = (fresh / anchored) if anchored else 0.0
+    # source_enumeration_coverage: fraction whose deletion is detectable by
+    # enumerating the authoritative source. We enumerate the git tree (`git
+    # ls-files`), so any file-anchored memory's disappearance is catchable — this
+    # is the "orphan slice" that's real regardless of retrieval.
+    enum = (with_files / anchored) if anchored else 0.0
     return {"orphaned": orphaned, "drifted": drifted, "fresh": fresh,
             "uncheckable": uncheckable, "anchored": anchored,
             "coverage": round(ref, 3), "locator_coverage": round(loc, 3),
-            "refetch_coverage": round(ref, 3)}
+            "refetch_coverage": round(ref, 3),
+            "source_enumeration_coverage": round(enum, 3)}
 
 
 def graduate_verified(store: Store, root: Path) -> int:
