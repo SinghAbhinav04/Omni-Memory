@@ -93,42 +93,113 @@ def recompute(store: Store, root: Path) -> dict:
             "level": "symbol" if use_symbols else "file"}
 
 
-def reconcile(store: Store, root: Path) -> dict:
-    """Enumerate the SOURCE and diff it against memory to catch ORPHANS — memories
-    whose anchored file (or symbol) was DELETED at the source.
+_EMPTY_RECONCILE = {"orphaned": 0, "drifted": 0, "fresh": 0, "uncheckable": 0,
+                    "anchored": 0, "coverage": 0.0, "locator_coverage": 0.0,
+                    "refetch_coverage": 0.0}
 
-    This is the half staleness-by-diff can't self-heal: a change re-flags itself
-    on the next pass that touches the file, but a deletion emits exactly one event
-    and nothing later mentions it, so an index-side query never notices what's
-    missing. Because OmniMemory anchors memories to concrete git-tracked files and
-    code-graph symbols, we can enumerate the live source and mark anything that no
-    longer resolves. Orphans are flagged stale (→ eviction candidates)."""
+
+def _integrity_verdict(root: Path, shas: dict) -> str:
+    """Exact source-integrity of one memory's anchored files, by re-resolving each
+    recorded blob sha at HEAD. Worst anchor wins:
+        ORPHANED (an object is gone) > DRIFTED (an sha changed) > FRESH.
+    This is content identity, not a diff — no false positives from unrelated edits,
+    and it catches deletion, which a diff against the index never can."""
+    worst = "FRESH"
+    for path, sha in shas.items():
+        cur = gitmeta.blob_sha(root, path)
+        if not cur:
+            return "ORPHANED"                     # object missing at HEAD → deleted
+        if cur != sha:
+            worst = "DRIFTED"
+    return worst
+
+
+def reconcile(store: Store, root: Path) -> dict:
+    """Measure source integrity by re-resolving each memory's recorded blob shas,
+    and flag deletions. This is the half staleness-by-diff can't self-heal: an edit
+    re-flags itself on the next pass, but a deletion emits one event and nothing
+    later mentions it, so an index-side query never notices what's missing.
+
+    Verdicts per anchored memory: FRESH (sha matches), DRIFTED (whole-file content
+    changed), ORPHANED (source deleted), or UNCHECKABLE (legacy memory with no
+    recorded blob sha — its path may resolve by name, but there's no content key to
+    verify against, so it is *counted*, never claimed as re-fetchable).
+
+    Only ORPHANED is flagged stale here: deletion is exact and index-side. DRIFT is
+    left to symbol-level `recompute`, which is finer than whole-file — flagging drift
+    here too would re-flag a memory for an unrelated edit elsewhere in its file.
+    Returns measured coverage, reported honestly by the doctor."""
     if not gitmeta.is_repo(root):
-        return {"orphaned": 0, "coverage": 0.0, "anchored": 0}
+        return dict(_EMPTY_RECONCILE)
     from .graph import extract
     live_files = {str(p.relative_to(root)) for p in extract._source_files(root)
                   if p.is_file()}
     sym_names = {n["name"] for n in store.code_graph()[0]
                  if n["kind"] in ("function", "method", "class")}
     now = time.time()
-    orphaned = anchored = refetchable = 0
+    anchored = fresh = drifted = orphaned = uncheckable = with_locator = 0
     for r in store.db.execute(
-            "SELECT id, files, symbols, stale FROM memory WHERE status='active'"):
+            "SELECT id, files, symbols, blob_shas, stale FROM memory "
+            "WHERE status='active'"):
         files = json.loads(r["files"] or "[]")
         symbols = json.loads(r["symbols"] or "[]")
         if not files and not symbols:
             continue                              # unanchored — can't reconcile
         anchored += 1
+        shas = json.loads(r["blob_shas"] or "{}")
+        if shas:                                  # exact, content-identity path
+            with_locator += 1
+            verdict = _integrity_verdict(root, shas)
+            if verdict == "ORPHANED":
+                orphaned += 1
+                store.set_stale(r["id"], True, None if r["stale"] else now, ["<deleted>"])
+            elif verdict == "DRIFTED":
+                drifted += 1                      # counted; recompute owns staleness
+            else:
+                fresh += 1
+            continue
+        # legacy memory (no blob sha): resolve by name only — can't verify content
         file_alive = any(f in live_files or (root / f).exists() for f in files)
         sym_alive = any(s.split("::")[-1].split(".")[-1] in sym_names for s in symbols)
         if file_alive or sym_alive:
-            refetchable += 1
+            uncheckable += 1
         else:                                     # every anchor gone → orphaned
             orphaned += 1
             store.set_stale(r["id"], True, None if r["stale"] else now, ["<deleted>"])
     store.db.commit()
-    coverage = (refetchable / anchored) if anchored else 0.0
-    return {"orphaned": orphaned, "coverage": round(coverage, 3), "anchored": anchored}
+    # locator_coverage: fraction carrying a re-fetchable content key (schema).
+    # refetch_coverage: fraction we verified re-fetchable TODAY (fresh present) —
+    # the measured number; it drops below locator_coverage exactly when sources drift
+    # or vanish. Legacy 'uncheckable' memories count toward neither.
+    loc = (with_locator / anchored) if anchored else 0.0
+    ref = (fresh / anchored) if anchored else 0.0
+    return {"orphaned": orphaned, "drifted": drifted, "fresh": fresh,
+            "uncheckable": uncheckable, "anchored": anchored,
+            "coverage": round(ref, 3), "locator_coverage": round(loc, 3),
+            "refetch_coverage": round(ref, 3)}
+
+
+def graduate_verified(store: Store, root: Path) -> int:
+    """Promote a memory to `verified` only when the LIBRARY can warrant it — the
+    single legitimate path to the top tier for machine-captured memory. A memory
+    graduates when its source anchor is re-fetchable AND unchanged (every recorded
+    blob sha still matches HEAD) AND the agent has cited it (uses>0). Content can
+    never self-declare `verified`; it must be earned by outcome + reality."""
+    if not gitmeta.is_repo(root):
+        return 0
+    n = 0
+    for r in store.db.execute(
+            "SELECT id, blob_shas, source FROM memory WHERE status='active' "
+            "AND evidence='stated' AND COALESCE(uses,0) > 0"):
+        shas = json.loads(r["blob_shas"] or "{}")
+        if not shas or r["source"] in ("imported", "shared"):
+            continue                              # no content key / untrusted origin
+        if _integrity_verdict(root, shas) == "FRESH":
+            store.db.execute("UPDATE memory SET evidence='verified' WHERE id=?", (r["id"],))
+            n += 1
+    if n:
+        store.db.commit()
+    return n
 
 
 def _affected_symbols(root: Path, anchor: str, head: str, changed_files: set,

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import gitmeta
-from .store import KINDS, Memory, Store
+from .store import KINDS, Memory, Store, clamp_evidence
 
 _KINDS_LINE = ("decision|concept|flow|event|endpoint|db|component|"
                "gotcha|assumption|todo|fact")
@@ -23,9 +23,10 @@ EXTRACTION_PROMPT = f"""\
 You are OmniMemory's extractor. From the conversation + git diff below, extract
 durable project memory a FUTURE coding session must know. Output ONLY a JSON
 array; each item: {{"kind": one of {_KINDS_LINE}, "text": one concise sentence,
-"files": [paths], "symbols": [names], "evidence": "verified"|"stated"|"inferred"}}.
-Use "evidence": "verified" for things confirmed by outcome THIS session (a bug that
-bit, a fix that worked, a test result), "inferred" for guesses, else "stated".
+"files": [paths], "symbols": [names], "evidence": "stated"|"inferred"}}.
+Use "inferred" for guesses (pruned first) and "stated" for things you assert
+directly; OmniMemory promotes a memory to "verified" itself once its code anchor
+proves re-fetchable and the memory gets cited — you never set "verified".
 Capture: DECISIONS (and why), request/data FLOWS, event/Kafka CONTRACTs, ENDPOINT
 maps (controller->service->repo + key params), DB schema facts, reusable
 COMPONENTs, GOTCHAs, and TODOs.
@@ -37,10 +38,11 @@ BUILD_PROMPT = f"""\
 You are OmniMemory doing a ONE-TIME bootstrap of this repository. Study the code,
 config, and any docs, then output ONLY a JSON array of durable project memories:
 {{"kind": one of {_KINDS_LINE}, "text": one concise sentence, "files": [paths],
-"symbols": [names], "evidence": "verified" | "stated" | "inferred"}}.
-Set "evidence": "verified" only when confirmed by outcome (a test, a failure/fix,
-explicit config), "inferred" when guessed from comments/naming/structure, else
-"stated". This drives how much the memory is trusted and how fast it's pruned.
+"symbols": [names], "evidence": "stated" | "inferred"}}.
+Use "inferred" when guessed from comments/naming/structure and "stated" when you
+assert it directly. Do NOT emit "verified" — OmniMemory earns that tier itself
+once the memory's code anchor stays re-fetchable and it gets cited. This drives
+how much the memory is trusted and how fast it's pruned.
 Prioritize, in order: (1) system ARCHITECTURE & key DECISIONs, (2) domain CONCEPTs,
 (3) end-to-end FLOWs, (4) event/Kafka CONTRACTs, (5) ENDPOINT map
 (path -> controller -> service -> repo/downstream + DTOs/params), (6) DB schema,
@@ -63,11 +65,18 @@ def remember(store: Store, root: Path, text: str, kind: str = "fact",
              source: str = "manual", evidence: str = "stated") -> Memory:
     branch = gitmeta.current_branch(root)
     commit = gitmeta._git(root, "rev-parse", "--short", "HEAD")
-    if evidence not in ("verified", "stated", "inferred"):
-        evidence = "stated"
+    # Reserved keyspace for trust: this is the path autonomous capture flows through
+    # (session / ai-session / ai-build / doc), so a machine can't forge `verified`
+    # here — clamp_evidence caps it by source. Human sources (manual) pass through, so
+    # `remember --verified` still works. `verified` for machine memory is earned later
+    # by staleness.graduate_verified, never self-declared.
+    evidence = clamp_evidence(evidence, source)
+    # Exact content identity for each anchored file, so staleness is re-fetchable
+    # (blob sha match/miss) rather than a heuristic diff.
     m = Memory(text=text.strip(), kind=kind if kind in KINDS else "fact",
                branch=branch, files=files or [], symbols=symbols or [],
-               commit_range=commit, source=source, evidence=evidence)
+               commit_range=commit, source=source, evidence=evidence,
+               blob_shas=gitmeta.blob_shas(root, files or []))
     return store.add_memory(m)
 
 
@@ -82,7 +91,9 @@ def remember_many(store: Store, root: Path, items: list[dict],
         text = (it.get("text") or "").strip()
         if not text:
             continue
-        # agent capture / AI build can mark evidence; docs & AI default to inferred
+        # Content may report `inferred` (a guess) to LOWER its own trust; it can
+        # never RAISE it — `add_memory` caps the tier by source authority, so a
+        # capture claiming `verified` is stored as `stated` and must earn `verified`.
         default_ev = "inferred" if source in ("ai-build", "doc") else "stated"
         remember(store, root, text, it.get("kind", "fact"),
                  it.get("files"), it.get("symbols"), source=source,

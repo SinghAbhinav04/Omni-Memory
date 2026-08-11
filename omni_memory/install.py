@@ -30,6 +30,9 @@ def _hooks_block() -> dict:
     return {
         "SessionStart": [{"hooks": [{"type": "command", "command": _hook_cmd("start")}]}],
         "UserPromptSubmit": [{"hooks": [{"type": "command", "command": _hook_cmd("inject")}]}],
+        # PreCompact captures BEFORE the context is summarized away, so memory isn't
+        # lost when a long session compacts mid-task; SessionEnd captures the rest.
+        "PreCompact": [{"hooks": [{"type": "command", "command": _hook_cmd("precompact")}]}],
         "SessionEnd": [{"hooks": [{"type": "command", "command": _hook_cmd("capture")}]}],
     }
 
@@ -164,6 +167,7 @@ def _install_claude_code() -> int:
     print(f"[+] hooks written → {settings}")
     print("    SessionStart     → refreshes + seeds verified memory (incremental)")
     print("    UserPromptSubmit → injects verified memory (enforced)")
+    print("    PreCompact       → captures before compaction (nothing lost mid-session)")
     print("    SessionEnd       → captures the session (via your agent, no key)")
     _write_agents_md(proj)
     print("\n[+] Restart Claude Code in this project. Then just work — memory")

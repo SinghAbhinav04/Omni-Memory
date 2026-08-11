@@ -277,13 +277,18 @@ def cmd_map(args):
     return 0
 
 
-def _read_transcript(path):
-    """Claude Code transcript is JSONL; flatten to 'role: text' for extraction."""
+def _read_transcript(path, start_line: int = 0):
+    """Claude Code transcript is JSONL; flatten to 'role: text' for extraction.
+    Returns (text, total_lines). `start_line` skips lines already captured on an
+    earlier run (e.g. a PreCompact capture before this SessionEnd), so the same
+    exchanges aren't re-extracted every time."""
     from pathlib import Path
     if not path or not Path(path).exists():
-        return ""
+        return "", start_line
+    lines = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    total = len(lines)
     out = []
-    for line in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
+    for line in lines[max(start_line, 0):]:
         try:
             obj = json.loads(line)
         except Exception:  # noqa: BLE001
@@ -296,7 +301,7 @@ def _read_transcript(path):
                                if isinstance(b, dict) and b.get("type") == "text")
         if isinstance(content, str) and content.strip():
             out.append(f"{role}: {content.strip()}")
-    return "\n".join(out)[-140_000:]
+    return "\n".join(out)[-140_000:], total
 
 
 def cmd_flush(args):
@@ -529,8 +534,16 @@ def _run_hook(args):
         if block and _should_inject(s, block):
             print(block)                        # stdout is added to the prompt context
         return 0
-    if args.event == "capture":                # SessionEnd/Stop → extract + store
-        text = _read_transcript(data.get("transcript_path"))
+    if args.event in ("capture", "precompact"):  # SessionEnd OR PreCompact → extract + store
+        # PreCompact fires BEFORE the context is summarized away, so unfiled memory
+        # isn't lost if the session compacts (or dies) before it ends. Capture reads
+        # the transcript heuristically — it does NOT ask the model to summarize at
+        # full context — so the pre-compaction pass is safe. An offset per transcript
+        # avoids re-extracting the same exchanges at the later SessionEnd.
+        tpath = data.get("transcript_path") or ""
+        offsets = s.get_meta("capture_offsets", {}) or {}
+        start = offsets.get(tpath, 0) if tpath else 0
+        text, total = _read_transcript(tpath, start_line=start)
         if text:
             n, dropped = sm.capture_from_json(s, root, text, source="session")
             # citation feedback: lift memories the agent actually cited [id]
@@ -544,8 +557,11 @@ def _run_hook(args):
             except Exception:  # noqa: BLE001
                 pass
             note = f", {dropped} dropped as noise" if dropped else ""
-            print(f"omni-memory: captured {n} memories{note}, +{bumped} citations",
-                  file=sys.stderr)
+            print(f"omni-memory: captured {n} memories{note}, +{bumped} citations "
+                  f"({args.event})", file=sys.stderr)
+        if tpath:                               # advance the offset even if nothing new
+            offsets[tpath] = total
+            s.set_meta("capture_offsets", offsets)
         return 0
     return 0
 
@@ -680,15 +696,18 @@ def cmd_doctor(args):
     stale = s.db.execute("SELECT COUNT(*) n FROM memory WHERE status='active' AND stale=1").fetchone()["n"]
     line(active > 0, "memories", f"{active} active" + (f", ⚠ {stale} stale" if stale else ""),
          "capture some (work a session) or `omni-memory build`")
-    try:  # measured provenance: what fraction of anchored memory is re-fetchable
+    try:  # MEASURED provenance: not schema presence, the number we can verify today
         from . import staleness
         rec = staleness.reconcile(s, root)
         if rec["anchored"]:
-            pct = int(rec["coverage"] * 100)
-            line(None if rec["orphaned"] else True, "source coverage",
-                 f"{pct}% of {rec['anchored']} anchored memories re-fetchable"
-                 + (f", ⚠ {rec['orphaned']} orphaned (source deleted)" if rec["orphaned"] else ""),
-                 "orphans are flagged stale — clear with `omni-memory gc`")
+            ref, loc = int(rec["refetch_coverage"] * 100), int(rec["locator_coverage"] * 100)
+            detail = (f"{ref}% of {rec['anchored']} anchored memories verified re-fetchable "
+                      f"({rec['fresh']} fresh, {rec['drifted']} drifted, "
+                      f"{rec['orphaned']} orphaned, {rec['uncheckable']} unverifiable); "
+                      f"{loc}% carry a content key")
+            clean = not (rec["orphaned"] or rec["uncheckable"])
+            line(True if clean else None, "source integrity", detail,
+                 "orphans flagged stale (`omni-memory gc`); re-capture legacy memory to add content keys")
     except Exception:  # noqa: BLE001
         pass
     agents = (root / "AGENTS.md").exists()
@@ -761,7 +780,8 @@ def main(argv=None):
     fl = sub.add_parser("flush")
     fl.add_argument("--scope", choices=["all", "memory", "graph"], default="all")
     fl.add_argument("--yes", "-y", action="store_true", help="skip confirmation")
-    hk = sub.add_parser("hook"); hk.add_argument("event", choices=["start", "inject", "capture"])
+    hk = sub.add_parser("hook")
+    hk.add_argument("event", choices=["start", "inject", "capture", "precompact"])
     ky = sub.add_parser("key"); ky.add_argument("provider", choices=["gemini", "anthropic", "openai"])
     ui = sub.add_parser("ui"); ui.add_argument("--port", type=int, default=7777)
     ins = sub.add_parser("install"); ins.add_argument("--platform", default="claude-code")

@@ -3,4 +3,4 @@
 Local-first, branch-aware, git-anchored, enforced.
 """
 
-__version__ = "0.9.17"
+__version__ = "0.9.18"

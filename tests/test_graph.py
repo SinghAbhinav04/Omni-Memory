@@ -165,8 +165,10 @@ def test_reconcile_flags_orphaned_source(store, repo):
     rec = staleness.reconcile(store, repo)
     assert rec["orphaned"] >= 1
     assert store.get_memory(orphan.id)["stale"]        # deleted source → orphaned
-    assert not store.get_memory(live.id)["stale"]      # live anchor → fresh
-    assert 0 < rec["coverage"] < 1                      # measured re-fetchable ratio
+    assert not store.get_memory(live.id)["stale"]      # live anchor → not orphaned
+    # these were added via add_memory without blob shas, so the survivor resolves by
+    # name but can't be content-verified → uncheckable, never inflating re-fetch %
+    assert rec["uncheckable"] >= 1
 
 
 def test_symbol_dossier(store, repo):

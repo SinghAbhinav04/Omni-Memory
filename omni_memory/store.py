@@ -70,6 +70,11 @@ class Memory:
     created: float = 0.0
     updated: float = 0.0
     supersedes_id: Optional[str] = None
+    # Exact source identity: {path: git blob sha at capture}. A stable content key
+    # we can re-resolve later — a changed sha is exact whole-file drift, a missing
+    # object is exact deletion. This is what makes staleness re-fetchable, not a
+    # heuristic. Populated at capture from `git rev-parse HEAD:<path>`.
+    blob_shas: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d = self.__dict__.copy()
@@ -82,7 +87,8 @@ CREATE TABLE IF NOT EXISTS memory(
   files TEXT, symbols TEXT, commit_range TEXT,
   created REAL, updated REAL, status TEXT, confidence REAL,
   source TEXT, supersedes_id TEXT, evidence TEXT DEFAULT 'stated',
-  stale INTEGER DEFAULT 0, stale_since REAL, stale_files TEXT);
+  stale INTEGER DEFAULT 0, stale_since REAL, stale_files TEXT,
+  blob_shas TEXT);
 CREATE TABLE IF NOT EXISTS branches(
   name TEXT PRIMARY KEY, creator TEXT, created_at REAL, base_branch TEXT,
   ahead INTEGER, behind INTEGER, status TEXT, merged_at REAL,
@@ -164,7 +170,8 @@ class Store:
                           ("stale_since", "REAL"), ("stale_files", "TEXT"),
                           ("uses", "INTEGER DEFAULT 0"), ("last_used", "REAL"),
                           ("quarantined_at", "REAL"), ("quarantine_reason", "TEXT"),
-                          ("evidence", "TEXT DEFAULT 'stated'")):
+                          ("evidence", "TEXT DEFAULT 'stated'"),
+                          ("blob_shas", "TEXT")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE memory ADD COLUMN {col} {decl}")
         cn = {r["name"] for r in self.db.execute("PRAGMA table_info(code_nodes)")}
@@ -187,30 +194,56 @@ class Store:
         m.id = m.id or uuid.uuid4().hex[:12]
         m.created = m.created or time.time()
         m.updated = time.time()
-        # contradiction handling: same branch+kind and near-identical text supersedes
+        m.evidence = m.evidence if m.evidence in _EVIDENCE_RANK else "stated"
+        # contradiction handling: same branch+kind near-identical text, or the same
+        # code anchor restated, supersedes the older record. (Trust is authority-gated
+        # upstream in session_memory.remember — the autonomous machine-capture path —
+        # so this low-level writer stays usable by trusted callers.)
         self._supersede_duplicates(m)
         self.db.execute(
             "INSERT OR REPLACE INTO memory"
             "(id,branch,kind,text,files,symbols,commit_range,created,updated,"
-            "status,confidence,source,supersedes_id,evidence) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "status,confidence,source,supersedes_id,evidence,blob_shas) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (m.id, m.branch, m.kind, m.text, json.dumps(m.files),
              json.dumps(m.symbols), m.commit_range, m.created, m.updated,
              m.status, m.confidence, m.source, m.supersedes_id,
-             getattr(m, "evidence", "stated")))
+             m.evidence, json.dumps(getattr(m, "blob_shas", {}) or {})))
         self.db.commit()
         return m
 
     def _supersede_duplicates(self, m: Memory) -> None:
         key = _norm(m.text)
+        m_syms, m_files = set(m.symbols or []), set(m.files or [])
+        m_rank = _EVIDENCE_RANK.get(getattr(m, "evidence", "stated"), 1)
         rows = self.db.execute(
-            "SELECT id,text FROM memory WHERE branch=? AND kind=? AND status='active'",
+            "SELECT id,text,symbols,files,evidence,COALESCE(uses,0) uses "
+            "FROM memory WHERE branch=? AND kind=? AND status='active'",
             (m.branch, m.kind)).fetchall()
         for r in rows:
-            if _similar(key, _norm(r["text"])):
-                self.db.execute("UPDATE memory SET status='superseded',updated=? WHERE id=?",
-                                (time.time(), r["id"]))
-                m.supersedes_id = r["id"]
+            other = _norm(r["text"])
+            r_syms = set(json.loads(r["symbols"] or "[]"))
+            r_files = set(json.loads(r["files"] or "[]"))
+            # Same code anchor = identical (non-empty) symbol set, or identical
+            # (non-empty) file set when neither carries symbols. Anchoring relaxes
+            # the text-similarity bar (a restatement of the same fact on the same
+            # symbol), but never collapses two genuinely different claims: it still
+            # requires real text overlap, so two distinct gotchas on one function
+            # both survive.
+            same_anchor = ((m_syms and m_syms == r_syms) or
+                           (not m_syms and not r_syms and m_files and m_files == r_files))
+            strict = _similar(key, other, 0.72)
+            relaxed = same_anchor and _similar(key, other, 0.5)
+            if not (strict or relaxed):
+                continue
+            # Guardrails on the anchor-relaxed path only: never retire a memory the
+            # agent has cited, nor one of strictly higher warrant than the newcomer.
+            if relaxed and not strict:
+                if r["uses"] > 0 or _EVIDENCE_RANK.get(r["evidence"], 1) > m_rank:
+                    continue
+            self.db.execute("UPDATE memory SET status='superseded',updated=? WHERE id=?",
+                            (time.time(), r["id"]))
+            m.supersedes_id = r["id"]
 
     def bump_uses(self, ids: list[str]) -> int:
         """Record that these memories were cited by the agent (relevance signal)."""
@@ -345,15 +378,20 @@ class Store:
             if self.db.execute("SELECT 1 FROM memory WHERE id=?", (mid,)).fetchone():
                 continue
             now = time.time()
+            # import is a user-initiated load of their own / a teammate's export —
+            # a trusted action, so the vetted evidence tier (incl. verified) is
+            # preserved. The forge that matters is autonomous machine capture, gated
+            # upstream in session_memory.remember, not this path.
+            evidence = m.get("evidence") if m.get("evidence") in _EVIDENCE_RANK else "stated"
             self.db.execute(
                 "INSERT INTO memory(id,branch,kind,text,files,symbols,commit_range,"
-                "created,updated,status,confidence,source,evidence) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "created,updated,status,confidence,source,evidence,blob_shas) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (mid, m.get("branch", "main"), m.get("kind", "fact"), m.get("text", ""),
                  json.dumps(m.get("files", [])), json.dumps(m.get("symbols", [])),
                  m.get("commit_range", ""), m.get("created", now), now,
                  "active", m.get("confidence", 0.8), source,
-                 m.get("evidence", "stated")))
+                 evidence, json.dumps(m.get("blob_shas", {}) or {})))
             added += 1
         self.db.commit()
         return added
@@ -478,6 +516,7 @@ class Store:
         d["symbols"] = json.loads(d["symbols"] or "[]")
         d["stale"] = bool(d.get("stale"))
         d["stale_files"] = json.loads(d.get("stale_files") or "[]")
+        d["blob_shas"] = json.loads(d.get("blob_shas") or "{}")
         d["uses"] = d.get("uses") or 0
         return d
 
@@ -607,7 +646,7 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().split())
 
 
-def _similar(a: str, b: str) -> bool:
+def _similar(a: str, b: str, thresh: float = 0.72) -> bool:
     """Cheap similarity: high token overlap → treat as the same fact."""
     if a == b:
         return True
@@ -615,4 +654,26 @@ def _similar(a: str, b: str) -> bool:
     if not ta or not tb:
         return False
     jacc = len(ta & tb) / len(ta | tb)
-    return jacc >= 0.72
+    return jacc >= thresh
+
+
+# -- trust tier (reserved keyspace) -----------------------------------------
+_EVIDENCE_RANK = {"verified": 2, "stated": 1, "inferred": 0}
+# Sources whose author is a human, so may assert the top tier directly.
+_HUMAN_SOURCES = ("manual", "dashboard")
+
+
+def clamp_evidence(evidence: str, source: str) -> str:
+    """Authority-gate the trust tier. The danger is not a caller lying about
+    content — it is a caller forging a tier the library is supposed to assign
+    itself, thereby buying ranking (rank.py) and eviction shielding (eviction.py)
+    it never earned. So content may only ever LOWER its own trust: a human source
+    (CLI `--verified` / the local dashboard) may assert `verified`; every machine
+    source (agent capture, AI build, docs, import, shared) is capped — `stated`
+    normally, `inferred` for AI/doc guesses. Machine memory reaches `verified` only
+    by library graduation (staleness.graduate_verified), never by self-declaration."""
+    ev = evidence if evidence in _EVIDENCE_RANK else "stated"
+    if source in _HUMAN_SOURCES:
+        return ev                                   # a human is the warrant
+    ceiling = "inferred" if source in ("ai-build", "ai-session", "doc") else "stated"
+    return ev if _EVIDENCE_RANK[ev] <= _EVIDENCE_RANK[ceiling] else ceiling
