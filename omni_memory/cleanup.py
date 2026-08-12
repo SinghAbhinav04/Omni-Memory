@@ -62,10 +62,10 @@ _CHAT = re.compile(
     r"|github\.com/\S+/(issues|pull|discussions)"
     r"|\bdrafted by\b|\bposted with\b|review and approval"
     r"|^https?://\S+$"                                # a bare link
-    r"|^>\s",                                         # a quoted reply line
+    r"|^>\s"                                          # a quoted reply line
+    r"|^@[\w-]+\b",                                   # opens with a mention = a reply
     re.I,
 )
-_MENTION = re.compile(r"(?:^|\s)@[\w-]+")             # @handle (not pkg like @scope/pkg mid-word)
 
 
 def _has_anchor(text: str) -> bool:
@@ -73,11 +73,14 @@ def _has_anchor(text: str) -> bool:
 
 
 def _is_chatter(t: str) -> bool:
-    """Structural markers of a conversation/thread rather than a project fact."""
-    if _CHAT.search(t):
-        return True
-    # two or more @handles reads like a thread reply, not a fact naming one package
-    return len(_MENTION.findall(t)) >= 2
+    """Structural markers of a conversation/thread rather than a project fact.
+
+    A real thread reply OPENS with a mention (`@handle …`) or pairs a mention with
+    a speech verb (`@handle commented`); a code fact carries decorators/annotations
+    (`@Retryable`, `@app.route`, `@pytest.fixture`) mid-sentence. Matching a bare
+    count of `@tokens` conflated the two and silently dropped framework-wiring
+    memories — so we key only on the structural markers in `_CHAT`."""
+    return bool(_CHAT.search(t))
 
 
 def is_noise(text: str, files=None, symbols=None, source: str = "session") -> bool:

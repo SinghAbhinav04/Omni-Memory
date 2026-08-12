@@ -26,6 +26,19 @@ def test_chatter_is_noise():
         files=["src/lib/gemini-client.ts"], source="session")
 
 
+def test_decorators_are_not_chatter():
+    """Regression: code annotations/decorators (@Retryable, @app.route, …) look
+    like @mentions but are legitimate framework-wiring facts, never chat noise."""
+    keep = [
+        "save() is annotated with @Retryable and @Transactional for the outbox write",
+        "the endpoint uses @app.route and @login_required decorators",
+        "createClaim is wrapped in @pytest.fixture and @mock.patch in the test",
+        "the model class uses @property and @staticmethod helpers",
+    ]
+    for t in keep:
+        assert not cleanup.is_noise(t, files=["x.py"], source="session"), f"dropped: {t}"
+
+
 def test_heuristic_capture_requires_anchor(store, repo):
     """The heuristic transcript scanner is strict — anchorless chatter is dropped,
     a concretely-anchored line survives."""
