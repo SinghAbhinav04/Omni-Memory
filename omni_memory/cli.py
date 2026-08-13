@@ -379,6 +379,58 @@ def _open_store(use_global):
     return _store()
 
 
+def cmd_share(args):
+    """`share` — export your memories to a committed per-author shard under
+    `.omni-memory/team/`, so teammates get them on their next session. Each author
+    owns a distinct file, so it merges without conflicts."""
+    from . import team
+    s, root = _store()
+    path = team.write_shard(s, root)
+    if not path:
+        print("no git identity — set `git config user.email` first, then re-run.")
+        return 1
+    rel = path.relative_to(root)
+    print(f"[+] wrote your team shard → {rel}")
+    if gitmeta._git(root, "check-ignore", str(rel)):   # a root .gitignore hides it
+        print(f"    ⚠ {rel} is git-ignored — remove `.omni-memory/` from your repo's root")
+        print("      .gitignore so the shard can be committed (the store self-ignores the db).")
+    print(f"    commit it:  git add {rel} && git commit -m 'omni-memory: share'")
+    print("    teammates get it automatically on their next session (or `omni-memory sync`).")
+    return 0
+
+
+def cmd_sync(args):
+    """`sync` — import teammates' shared memory shards (run after a `git pull`;
+    also happens automatically at session start)."""
+    from . import team
+    s, root = _store()
+    n = team.sync(s, root)
+    if n:
+        digest.write_digest(s)
+        print(f"[+] synced {n} shared memories from teammates (↗external — re-verify locally)")
+    else:
+        print("up to date — no new shared memories."
+              + ("" if team.enabled(root) else " (team sharing not set up: run `omni-memory share`)"))
+    return 0
+
+
+def cmd_team(args):
+    """`team` — who has contributed to this project's memory, and shard status."""
+    from . import team
+    s, root = _store()
+    st = team.status(s, root)
+    print(f"you: {st['me'] or '(no git identity — set git config user.email)'}")
+    print("memory by author:")
+    for r in st["by_author"]:
+        print(f"  {r['c']:>4}  {r['a']}")
+    if st["shards"]:
+        print("committed shards: " + ", ".join(st["shards"]))
+    if not st["enabled"]:
+        print("team sharing not set up — `omni-memory share` writes your shard, commit it,")
+        print("teammates `git pull` then sync automatically at session start.")
+    return 0
+
+
 def cmd_export(args):
     """`export [file] [--global]` — write a portable JSON snapshot of memories.
     Default target is `omni-memory.json` at the repo root; commit it to share the
@@ -551,7 +603,15 @@ def _run_hook(args):
         return 0
     mode = s.get_meta("inject_mode", "session")   # session (default) | auto | manual
     if args.event == "start":                  # SessionStart → refresh + ensure AGENTS.md
-        _bootstrap_shared(s, root)             # fresh clone → load committed memory
+        _bootstrap_shared(s, root)             # fresh clone → load committed memory (legacy single file)
+        try:                                    # team sync: pull teammates' shards every session
+            from . import team
+            tn = team.sync(s, root)
+            if tn:
+                print(f"omni-memory: synced {tn} shared memories from teammates "
+                      "(↗external — re-verify locally).", file=sys.stderr)
+        except Exception:  # noqa: BLE001
+            pass
         # Rebuild ONLY if git state changed since last time (the code graph is
         # persisted in SQLite) — so opening a session doesn't re-parse the whole
         # repo when nothing moved. Keeping the store fresh here is what lets the
@@ -607,6 +667,12 @@ def _run_hook(args):
             if n:                               # cross-session event bus entry
                 s.add_event(gitmeta.current_branch(root),
                             f"captured {n} memories" + (f" (+{bumped} cited)" if bumped else ""))
+            try:                                # keep my committed team shard current
+                from . import team
+                if team.enabled(root):
+                    team.write_shard(s, root)
+            except Exception:  # noqa: BLE001
+                pass
         if tpath:                               # advance the offset even if nothing new
             offsets[tpath] = total
             s.set_meta("capture_offsets", offsets)
@@ -814,6 +880,7 @@ def main(argv=None):
     r.add_argument("text", nargs="+")
     lk = sub.add_parser("lock"); lk.add_argument("id")
     ul = sub.add_parser("unlock"); ul.add_argument("id")
+    sub.add_parser("share"); sub.add_parser("sync"); sub.add_parser("team")
     sub.add_parser("capture")
     ij = sub.add_parser("inject"); ij.add_argument("query", nargs="*"); ij.add_argument("--file", action="append")
     rc = sub.add_parser("recall"); rc.add_argument("query", nargs="+")
@@ -867,6 +934,7 @@ def main(argv=None):
         "recall": cmd_recall, "branches": cmd_branches,
         "forget": cmd_forget, "used": cmd_used, "gc": cmd_gc, "restore": cmd_restore,
         "lock": cmd_lock, "unlock": cmd_lock,
+        "share": cmd_share, "sync": cmd_sync, "team": cmd_team,
         "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
         "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,

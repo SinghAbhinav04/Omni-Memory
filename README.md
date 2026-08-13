@@ -81,6 +81,12 @@ session ends.
   unmerged, or long dormant) and long-stale/uncited memories are auto-quarantined
   (reversible), so false memory doesn't live forever. Memories the agent keeps
   citing are shielded. `gc --dry-run` previews; hard-delete stays human-gated.
+- **Team sharing (git-native)** — `omni-memory share` writes your memories to a
+  committed per-author shard under `.omni-memory/team/`. Because each teammate
+  owns a distinct file, it merges with **zero conflicts**; a `git pull` syncs the
+  team's memory into your store automatically at session start (idempotent, tagged
+  `↗external`, attributed to its author). Blob-SHAs are content hashes, so a
+  teammate's memory re-verifies on your clone.
 - **Graph + dashboard** — `omni-memory ui` opens a local UI: browsable memory
   docs, the knowledge graph, and the repo/branch graph.
 
@@ -105,7 +111,10 @@ omni-memory check            # re-anchor vs git; flag ⚠ stale memories (symbol
 omni-memory gc [--dry-run] [--purge]         # quarantine dead/false memory
 omni-memory usage [--max-items N] [--budget C]   # per-prompt token footprint + tune
 
-# sharing / reset
+# team / sharing / reset
+omni-memory share            # write your committed per-author memory shard (git-merge-safe)
+omni-memory sync             # pull teammates' shared memory (also automatic at session start)
+omni-memory team             # who contributed what to this project's memory
 omni-memory export [file] [--global]         # portable snapshot (commit it to share)
 omni-memory import [file] [--global]         # load an export (idempotent, ids preserved)
 omni-memory flush [--scope all|memory|graph] [-y]    # wipe to rebuild from scratch

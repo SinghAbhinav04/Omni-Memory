@@ -145,5 +145,9 @@ def test_atomic_write_concurrent(tmp_path):
 
 
 def test_self_ignore_written(store, repo):
-    # opening the store (the `store` fixture) creates .omni-memory/.gitignore = *
-    assert (repo / ".omni-memory" / ".gitignore").read_text().strip() == "*"
+    # opening the store writes a managed .gitignore that hides the db but carves
+    # out team/ (committable shards) and .gitignore itself.
+    from omni_memory.store import STORE_GITIGNORE
+    gi = (repo / ".omni-memory" / ".gitignore").read_text()
+    assert gi == STORE_GITIGNORE
+    assert gi.startswith("/*") and "!/team/" in gi

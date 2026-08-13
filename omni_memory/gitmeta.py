@@ -32,6 +32,15 @@ def current_branch(root: Path) -> str:
     return _git(root, "rev-parse", "--abbrev-ref", "HEAD") or "main"
 
 
+def git_user(root: Path) -> str:
+    """The committing identity ("Name <email>"), for authoring shared memory."""
+    name = _git(root, "config", "user.name")
+    email = _git(root, "config", "user.email")
+    if name and email:
+        return f"{name} <{email}>"
+    return email or name or ""
+
+
 def blob_sha(root: Path, path: str) -> str:
     """The git blob object id of `path` at HEAD (40-hex), or '' if the path is
     untracked or absent. Content identity, not location: identical content →

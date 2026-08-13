@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 STORE_DIRNAME = ".omni-memory"
+# Ignore every top-level store entry (the db + sidecars) EXCEPT this file and the
+# `team/` dir. `/*` is anchored to the top level, so it never matches team/'s
+# contents — the shards inside stay committable. (Plain `*` would match them at
+# their own level and git won't re-include a file under an excluded parent.)
+STORE_GITIGNORE = "/*\n!/.gitignore\n!/team/\n"
 
 
 def find_project_root(start: Optional[Path] = None) -> Path:
@@ -29,15 +34,16 @@ def find_project_root(start: Optional[Path] = None) -> Path:
 def store_dir(root: Optional[Path] = None) -> Path:
     d = find_project_root(root) / STORE_DIRNAME
     d.mkdir(exist_ok=True)
-    # Self-ignore: a `*` .gitignore inside the store makes the whole directory
-    # (the SQLite db + its -wal/-shm sidecars) invisible to git in any project,
-    # so users never see `.omni-memory/` clutter and never commit the live db.
+    # Self-ignore: a `*` .gitignore inside the store keeps the live db (+ its
+    # -wal/-shm sidecars) out of git, but carves out `team/` so per-author shared
+    # memory shards CAN be committed for team sync (see team.py).
     gi = d / ".gitignore"
-    if not gi.exists():
-        try:
-            gi.write_text("*\n", encoding="utf-8")
-        except Exception:  # noqa: BLE001
-            pass
+    try:
+        cur = gi.read_text(encoding="utf-8").strip() if gi.exists() else ""
+        if cur in ("", "*"):                      # missing or our old managed content
+            gi.write_text(STORE_GITIGNORE, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
     return d
 
 
@@ -81,6 +87,9 @@ class Memory:
     # Protected ("constitutional") memory — an architectural decision, identity
     # fact, or standing rule that must never decay or be evicted. Pinned by hand.
     protected: bool = False
+    # Who captured this — the git user at capture ("Name <email>"). Powers team
+    # sharing: attribution + per-author shards that merge without conflict.
+    author: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = self.__dict__.copy()
@@ -94,7 +103,7 @@ CREATE TABLE IF NOT EXISTS memory(
   created REAL, updated REAL, status TEXT, confidence REAL,
   source TEXT, supersedes_id TEXT, evidence TEXT DEFAULT 'stated',
   stale INTEGER DEFAULT 0, stale_since REAL, stale_files TEXT,
-  blob_shas TEXT, protected INTEGER DEFAULT 0);
+  blob_shas TEXT, protected INTEGER DEFAULT 0, author TEXT);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, branch TEXT, summary TEXT);
 CREATE TABLE IF NOT EXISTS branches(
@@ -180,7 +189,8 @@ class Store:
                           ("quarantined_at", "REAL"), ("quarantine_reason", "TEXT"),
                           ("evidence", "TEXT DEFAULT 'stated'"),
                           ("blob_shas", "TEXT"),
-                          ("protected", "INTEGER DEFAULT 0")):
+                          ("protected", "INTEGER DEFAULT 0"),
+                          ("author", "TEXT")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE memory ADD COLUMN {col} {decl}")
         cn = {r["name"] for r in self.db.execute("PRAGMA table_info(code_nodes)")}
@@ -212,13 +222,14 @@ class Store:
         self.db.execute(
             "INSERT OR REPLACE INTO memory"
             "(id,branch,kind,text,files,symbols,commit_range,created,updated,"
-            "status,confidence,source,supersedes_id,evidence,blob_shas,protected) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "status,confidence,source,supersedes_id,evidence,blob_shas,protected,author) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (m.id, m.branch, m.kind, m.text, json.dumps(m.files),
              json.dumps(m.symbols), m.commit_range, m.created, m.updated,
              m.status, m.confidence, m.source, m.supersedes_id,
              m.evidence, json.dumps(getattr(m, "blob_shas", {}) or {}),
-             1 if getattr(m, "protected", False) else 0))
+             1 if getattr(m, "protected", False) else 0,
+             getattr(m, "author", "") or ""))
         self.db.commit()
         return m
 
@@ -439,13 +450,14 @@ class Store:
             evidence = m.get("evidence") if m.get("evidence") in _EVIDENCE_RANK else "stated"
             self.db.execute(
                 "INSERT INTO memory(id,branch,kind,text,files,symbols,commit_range,"
-                "created,updated,status,confidence,source,evidence,blob_shas) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "created,updated,status,confidence,source,evidence,blob_shas,author) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (mid, m.get("branch", "main"), m.get("kind", "fact"), m.get("text", ""),
                  json.dumps(m.get("files", [])), json.dumps(m.get("symbols", [])),
                  m.get("commit_range", ""), m.get("created", now), now,
                  "active", m.get("confidence", 0.8), source,
-                 evidence, json.dumps(m.get("blob_shas", {}) or {})))
+                 evidence, json.dumps(m.get("blob_shas", {}) or {}),
+                 m.get("author", "") or ""))
             added += 1
         self.db.commit()
         return added

@@ -76,7 +76,8 @@ def remember(store: Store, root: Path, text: str, kind: str = "fact",
     m = Memory(text=text.strip(), kind=kind if kind in KINDS else "fact",
                branch=branch, files=files or [], symbols=symbols or [],
                commit_range=commit, source=source, evidence=evidence,
-               blob_shas=gitmeta.blob_shas(root, files or []))
+               blob_shas=gitmeta.blob_shas(root, files or []),
+               author=gitmeta.git_user(root))
     return store.add_memory(m)
 
 
