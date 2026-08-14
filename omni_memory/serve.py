@@ -171,6 +171,9 @@ def _handler(root: Path):
             if u.path == "/api/codegraph":
                 nodes, edges = store.code_graph()
                 return self._send(200, json.dumps({"nodes": nodes, "edges": edges}))
+            if u.path == "/api/healthmap":
+                from . import healthmap
+                return self._send(200, json.dumps(healthmap.build(store, root)))
             if u.path == "/api/symbol":
                 sid = q.get("id", [""])[0]
                 dossier = store.symbol_dossier(sid)

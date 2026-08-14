@@ -6,106 +6,136 @@
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <style>
+  /* ── theme: LIGHT by default (like the health-map galaxy), dark on toggle ── */
+  :root{
+    --bg:#f2e8d5; --panel:#fbf5e9; --panel-2:#eddfc7; --code-bg:#f0e5d0;
+    --border:#e4d5b8; --border-2:#d6c29c;
+    --fg:#3a2c18; --fg-2:#7c6442; --fg-3:#a48c66;
+    --accent:#b5791b; --accent-2:#8a5412; --nav-on:#eeddbd; --shadow:rgba(96,64,18,.16);
+    --node-stroke:#fbf5e9; --link:#dcc59a; --link-strong:#b59a6a; --graph-text:#7c6442;
+    --node-muted:#e7d8ba; --sel:#8a5412;
+    --ui:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  :root[data-theme="dark"]{
+    --bg:#1b1509; --panel:#241d0f; --panel-2:#2f2615; --code-bg:#2a2213;
+    --border:#3c3018; --border-2:#4d3e22;
+    --fg:#eaddc2; --fg-2:#b39a6f; --fg-3:#8a7551;
+    --accent:#d9a441; --accent-2:#e8bd57; --nav-on:#2f2615; --shadow:rgba(0,0,0,.55);
+    --node-stroke:#1b1509; --link:#3c3018; --link-strong:#5c4a29; --graph-text:#b39a6f;
+    --node-muted:#2f2615; --sel:#e8bd57;
+  }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:#0b0b0c;color:#d6d6d8;
-    font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13.5px/1.55 var(--ui);
+    -webkit-font-smoothing:antialiased}
   #app{display:flex;height:100vh}
-  nav{width:180px;flex:none;border-right:1px solid #1c1c1f;padding:18px 0;background:#0d0d0e}
-  nav h1{font-size:14px;margin:0 18px 18px;letter-spacing:.06em;color:#eee}
-  nav a{display:block;padding:8px 18px;color:#8a8a90;cursor:pointer;border-left:2px solid transparent}
-  nav a.on{color:#f0f0f0;border-left-color:#f0f0f0;background:#141416}
+  nav{width:194px;flex:none;border-right:1px solid var(--border);padding:16px 0;background:var(--panel)}
+  nav h1{font-size:15px;margin:0 18px 16px;letter-spacing:.01em;color:var(--fg);font-weight:650}
+  nav a{display:block;padding:8px 18px;color:var(--fg-2);cursor:pointer;border-left:2px solid transparent;font-weight:500}
+  nav a:hover{color:var(--fg)}
+  nav a.on{color:var(--accent-2);border-left-color:var(--accent);background:var(--nav-on);font-weight:650}
   main{flex:1;overflow:auto;position:relative}
-  header{padding:16px 24px;border-bottom:1px solid #1c1c1f;color:#7c7c82;font-size:12px}
+  header{padding:15px 24px;border-bottom:1px solid var(--border);color:var(--fg-2);font-size:12.5px;background:var(--panel)}
   .wrap{padding:20px 24px}
-  .hint{color:#5a5a60}
-  input.search{width:100%;max-width:420px;background:#101012;border:1px solid #23232a;
-    color:#e6e6e8;border-radius:8px;padding:8px 12px;font:inherit;margin-bottom:16px}
-  .mem{border:1px solid #1c1c1f;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#0e0e10}
-  .mem .k{color:#6c6c72;font-size:10px;text-transform:uppercase;letter-spacing:.08em}
-  .mem .t{margin:4px 0 6px;color:#eaeaea}
-  .mem .f{color:#7c7c82;font-size:11px}
-  .chip{display:inline-block;border:1px solid #2f2f34;border-radius:9px;padding:1px 8px;
-    margin-right:6px;color:#a9a9af;font-size:10px}
+  .hint{color:var(--fg-3)}
+  input.search{width:100%;max-width:420px;background:var(--panel);border:1px solid var(--border-2);
+    color:var(--fg);border-radius:9px;padding:9px 12px;font:inherit;margin-bottom:16px}
+  .mem{border:1px solid var(--border);border-radius:11px;padding:12px 14px;margin-bottom:10px;
+    background:var(--panel);box-shadow:0 1px 2px var(--shadow)}
+  .mem .k{color:var(--fg-3);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+  .mem .t{margin:4px 0 6px;color:var(--fg)}
+  .mem .f{color:var(--fg-2);font-size:11px;font-family:var(--mono)}
+  .chip{display:inline-block;border:1px solid var(--border-2);border-radius:9px;padding:1px 8px;
+    margin-right:6px;color:var(--fg-2);font-size:10px;font-family:var(--mono)}
   svg{width:100%;height:calc(100vh - 54px);display:block}
-  text{font:10px ui-monospace,monospace;fill:#8a8a90}
-  .brow{border:1px solid #1c1c1f;border-radius:10px;padding:10px 14px;margin-bottom:8px;
-    background:#0e0e10;display:flex;justify-content:space-between;gap:12px}
-  .brow b{color:#eee}
-  .merged{color:#7c7c82}
-  .md{max-width:900px;color:#cfcfd2}
-  .md h1,.md h2,.md h3{color:#eee;border-bottom:1px solid #1c1c1f;padding-bottom:4px;margin-top:24px}
+  text{font:10px var(--mono);fill:var(--graph-text)}
+  .brow{border:1px solid var(--border);border-radius:11px;padding:10px 14px;margin-bottom:8px;
+    background:var(--panel);display:flex;justify-content:space-between;gap:12px;box-shadow:0 1px 2px var(--shadow)}
+  .brow b{color:var(--fg)}
+  .merged{color:var(--fg-2)}
+  .md{max-width:900px;color:var(--fg)}
+  .md h1,.md h2,.md h3{color:var(--fg);border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:24px}
   .md table{border-collapse:collapse;width:100%;margin:12px 0;font-size:12px}
-  .md th,.md td{border:1px solid #23232a;padding:6px 8px;text-align:left;vertical-align:top}
-  .md th{background:#141416;color:#c9c9cd}
-  .md code{background:#141416;border:1px solid #23232a;border-radius:4px;padding:1px 5px;font-size:12px}
-  .md pre{background:#0e0e10;border:1px solid #1c1c1f;border-radius:8px;padding:12px;overflow:auto}
+  .md th,.md td{border:1px solid var(--border-2);padding:6px 8px;text-align:left;vertical-align:top}
+  .md th{background:var(--panel-2);color:var(--fg)}
+  .md code{background:var(--code-bg);border:1px solid var(--border-2);border-radius:4px;padding:1px 5px;font-size:12px;font-family:var(--mono)}
+  .md pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto}
   .md pre code{border:none;background:none}
-  .md a{color:#9db}.md svg{max-width:100%;background:#0e0e10;border:1px solid #1c1c1f;border-radius:8px}
+  .md a{color:var(--accent-2)}.md svg{max-width:100%;background:var(--panel);border:1px solid var(--border);border-radius:8px}
 
   /* ── kind color system (shared by memory cards + graph nodes) ── */
   .badge{display:inline-block;padding:1px 7px;border-radius:6px;font-size:9px;
-    text-transform:uppercase;letter-spacing:.07em;font-weight:600;vertical-align:middle}
-  .k-decision{background:#3a2f10;color:#f0c674}.k-gotcha{background:#3a1414;color:#f2a1a1}
-  .k-flow{background:#0e2a2f;color:#7fd7e0}.k-fact{background:#1a2436;color:#9db8e0}
-  .k-endpoint{background:#102a18;color:#8fdca6}.k-todo{background:#2a2410;color:#d8c98a}
-  .k-class{background:#2a1f3a;color:#c9a9f0}.k-function{background:#10261c;color:#7fe0a8}
-  .k-method{background:#122436;color:#8fc7f0}.k-file{background:#1c1c22;color:#9a9aa2}
-  .k-assumption,.k-concept,.k-component,.k-event,.k-db{background:#20202a;color:#b0b0b8}
+    text-transform:uppercase;letter-spacing:.07em;font-weight:700;vertical-align:middle;
+    background:color-mix(in srgb, var(--kc,#9a865a) 17%, var(--panel));
+    color:color-mix(in srgb, var(--kc,#9a865a) 80%, var(--fg));
+    border:1px solid color-mix(in srgb, var(--kc,#9a865a) 34%, var(--panel))}
+  .k-decision{--kc:#c9902e}.k-gotcha{--kc:#c1522f}
+  .k-flow{--kc:#b8791f}.k-fact{--kc:#9c7b3f}
+  .k-endpoint{--kc:#8a7d2b}.k-todo{--kc:#cc9a1f}
+  .k-class{--kc:#a86a3c}.k-function{--kc:#96852f}
+  .k-method{--kc:#b07a2e}.k-file{--kc:#a3927a}
+  .k-user{--kc:#c1522f}.k-feedback{--kc:#b5622e}
+  .k-assumption,.k-concept,.k-component,.k-event,.k-db{--kc:#9a865a}
 
   /* ── inspector: slide-in node dossier ── */
-  #insp{position:fixed;top:0;right:0;width:380px;max-width:90vw;height:100vh;
-    background:#0e0e11;border-left:1px solid #23232a;box-shadow:-18px 0 40px rgba(0,0,0,.45);
+  #insp{position:fixed;top:0;right:0;width:390px;max-width:92vw;height:100vh;
+    background:var(--panel);border-left:1px solid var(--border);box-shadow:-18px 0 44px var(--shadow);
     transform:translateX(100%);transition:transform .22s cubic-bezier(.2,.8,.2,1);
     z-index:40;overflow-y:auto;padding:0}
   #insp.open{transform:translateX(0)}
-  #insp .ihead{position:sticky;top:0;background:#0e0e11;border-bottom:1px solid #1c1c1f;
+  #insp .ihead{position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--border);
     padding:16px 18px 12px;z-index:1}
-  #insp .iclose{position:absolute;top:12px;right:14px;color:#7c7c82;cursor:pointer;
+  #insp .iclose{position:absolute;top:12px;right:14px;color:var(--fg-2);cursor:pointer;
     font-size:18px;line-height:1;border:none;background:none}
-  #insp .iname{font-size:15px;color:#f2f2f4;font-weight:600;word-break:break-word;margin:6px 0 2px}
-  #insp .ipath{font-size:11px;color:#6c6c72;word-break:break-all}
+  #insp .iname{font-size:15px;color:var(--fg);font-weight:650;word-break:break-word;margin:6px 0 2px}
+  #insp .ipath{font-size:11px;color:var(--fg-3);word-break:break-all;font-family:var(--mono)}
   #insp .ibody{padding:14px 18px 40px}
-  #insp .sig{background:#0a0a0c;border:1px solid #1c1c1f;border-radius:8px;padding:9px 11px;
-    margin:2px 0 14px;color:#cde8d6;font-size:12px;white-space:pre-wrap;word-break:break-word}
-  #insp .sec{margin:16px 0 6px;color:#7c7c82;font-size:10px;text-transform:uppercase;letter-spacing:.09em}
-  #insp .doc{color:#c4c4c8;font-size:12.5px;line-height:1.55;border-left:2px solid #2b2b31;padding-left:10px}
+  #insp .sig{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:9px 11px;
+    margin:2px 0 14px;color:var(--accent-2);font-size:12px;font-family:var(--mono);white-space:pre-wrap;word-break:break-word}
+  #insp .sec{margin:16px 0 6px;color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.09em}
+  #insp .doc{color:var(--fg);font-size:12.5px;line-height:1.55;border-left:2px solid var(--border-2);padding-left:10px}
   #insp .ref{display:flex;align-items:center;gap:8px;padding:6px 9px;margin:4px 0;border-radius:7px;
-    background:#111114;border:1px solid #1c1c1f;cursor:pointer;font-size:12px;color:#d0d0d4}
-  #insp .ref:hover{background:#16161a;border-color:#2f2f36}
-  #insp .ref .mono{color:#8a8a90;font-size:10px;margin-left:auto}
-  .pill{display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;margin:0 6px 6px 0}
-  .pill-raise{background:#2a1414;color:#f0a5a5;border:1px solid #3a1c1c}
-  .pill-emit{background:#2a2410;color:#e6cf8a;border:1px solid #3a3218}
-  .pill-call{background:#14202a;color:#9cc9e0;border:1px solid #1c2f3a}
-  .empty{color:#55555c;font-size:12px;font-style:italic}
-  #insp .conns{display:flex;flex-wrap:wrap;gap:6px 12px;margin:2px 0 4px;font-size:11px;color:#9a9aa2}
+    background:var(--panel-2);border:1px solid var(--border);cursor:pointer;font-size:12px;color:var(--fg)}
+  #insp .ref:hover{border-color:var(--border-2)}
+  #insp .ref .mono{color:var(--fg-2);font-size:10px;margin-left:auto;font-family:var(--mono)}
+  .pill{display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;margin:0 6px 6px 0;
+    background:color-mix(in srgb,var(--pc,#889) 15%,var(--panel));color:color-mix(in srgb,var(--pc,#889) 75%,var(--fg));
+    border:1px solid color-mix(in srgb,var(--pc,#889) 30%,var(--panel))}
+  .pill-raise{--pc:#c1522f}
+  .pill-emit{--pc:#cc9a1f}
+  .pill-call{--pc:#b07a2e}
+  .empty{color:var(--fg-3);font-size:12px;font-style:italic}
+  #insp .conns{display:flex;flex-wrap:wrap;gap:6px 12px;margin:2px 0 4px;font-size:11px;color:var(--fg-2)}
   #insp .conns span{white-space:nowrap}
-  #insp .ifile{margin-top:22px;padding-top:10px;border-top:1px solid #1c1c1f;text-align:right;
-    font-family:ui-monospace,monospace;font-size:10.5px;color:#8a8a90;word-break:break-all}
-  #insp .ifile a{color:#8fc7f0;text-decoration:none}
-  nav a#flushbtn{color:#a86b6b;margin-top:8px}nav a#flushbtn:hover{color:#e08a8a}
-  #gsearch{width:calc(100% - 24px);margin:0 12px 12px;background:#101012;border:1px solid #23232a;
-    color:#e6e6e8;border-radius:8px;padding:7px 10px;font:11px/1.4 inherit}
-  #gsearch:focus{outline:none;border-color:#2a5a48}
-  .sres{border:1px solid #1c1c1f;border-radius:9px;padding:9px 12px;margin-bottom:7px;background:#0e0e10;cursor:pointer}
-  .sres:hover{background:#141418;border-color:#2f2f36}
+  #insp .ifile{margin-top:22px;padding-top:10px;border-top:1px solid var(--border);text-align:right;
+    font-family:var(--mono);font-size:10.5px;color:var(--fg-2);word-break:break-all}
+  #insp .ifile a{color:var(--accent-2);text-decoration:none}
+  nav a#flushbtn{color:#c2554a;margin-top:8px}nav a#flushbtn:hover{color:#e0574f}
+  nav a#themebtn{color:var(--fg-2);margin-top:2px}nav a#themebtn:hover{color:var(--fg)}
+  #gsearch{width:calc(100% - 24px);margin:0 12px 12px;background:var(--panel-2);border:1px solid var(--border-2);
+    color:var(--fg);border-radius:9px;padding:7px 10px;font:11px/1.4 var(--ui)}
+  #gsearch:focus{outline:none;border-color:var(--accent)}
+  .sres{border:1px solid var(--border);border-radius:9px;padding:9px 12px;margin-bottom:7px;background:var(--panel);cursor:pointer}
+  .sres:hover{border-color:var(--border-2);box-shadow:0 1px 3px var(--shadow)}
   .sres .sr-h{display:flex;align-items:center;gap:8px;margin-bottom:3px}
-  .sres .sr-mono{color:#8a8a90;font-size:10px;margin-left:auto}
-  .stat{display:flex;gap:18px;margin-bottom:14px;flex-wrap:wrap}
-  .stat .s{background:#0e0e10;border:1px solid #1c1c1f;border-radius:9px;padding:8px 14px;min-width:78px}
-  .stat .s b{display:block;font-size:19px;color:#f0f0f2}.stat .s span{font-size:10px;color:#6c6c72;text-transform:uppercase;letter-spacing:.06em}
-  .btn{background:#16332a;border:1px solid #21503f;color:#8fe0b4;border-radius:8px;
-    padding:8px 14px;font:inherit;cursor:pointer;white-space:nowrap}
-  .btn:hover{background:#1c4436;border-color:#2a6b53}
-  .btn.sec{background:#111114;border-color:#2a2a30;color:#c0c0c6}.btn.sec:hover{background:#17171b}
-  .btn.danger{background:#2a1414;border-color:#4a2020;color:#e89a9a}.btn.danger:hover{background:#361a1a}
-  #insp textarea,#insp select,#insp input{width:100%;background:#0a0a0c;border:1px solid #23232a;
-    color:#e6e6e8;border-radius:8px;padding:9px 11px;font:inherit;margin:4px 0 12px}
+  .sres .sr-mono{color:var(--fg-2);font-size:10px;margin-left:auto;font-family:var(--mono)}
+  .stat{display:flex;gap:14px;margin-bottom:16px;flex-wrap:wrap}
+  .stat .s{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:10px 16px;min-width:82px;box-shadow:0 1px 2px var(--shadow)}
+  .stat .s b{display:block;font-size:21px;color:var(--fg);font-weight:650}.stat .s span{font-size:10px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.06em}
+  .btn{background:var(--accent);border:1px solid var(--accent);color:#fff;border-radius:8px;
+    padding:8px 14px;font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+  .btn:hover{filter:brightness(1.06)}
+  .btn.sec{background:var(--panel-2);border-color:var(--border-2);color:var(--fg)}.btn.sec:hover{filter:brightness(.98)}
+  .btn.danger{background:#c1522f;border-color:#c1522f;color:#fff}.btn.danger:hover{filter:brightness(1.05)}
+  nav a#flushbtn{color:#c1522f}
+  #insp textarea,#insp select,#insp input{width:100%;background:var(--panel-2);border:1px solid var(--border-2);
+    color:var(--fg);border-radius:8px;padding:9px 11px;font:inherit;margin:4px 0 12px}
   #insp textarea{min-height:110px;resize:vertical;line-height:1.5}
   .irow{display:flex;gap:8px;margin-top:6px}
-  .doc-edit{width:100%;min-height:60vh;background:#0a0a0c;border:1px solid #23232a;color:#dcdce0;
-    border-radius:8px;padding:12px;font:12px/1.6 ui-monospace,monospace;resize:vertical}
-  .stale-banner{background:#2a1e10;border:1px solid #4a3418;color:#e6c78a;border-radius:8px;
+  .doc-edit{width:100%;min-height:60vh;background:var(--panel-2);border:1px solid var(--border-2);color:var(--fg);
+    border-radius:8px;padding:12px;font:12px/1.6 var(--mono);resize:vertical}
+  .stale-banner{background:color-mix(in srgb,#ca8a04 14%,var(--panel));border:1px solid color-mix(in srgb,#ca8a04 34%,var(--panel));
+    color:color-mix(in srgb,#ca8a04 72%,var(--fg));border-radius:8px;
     padding:10px 12px;margin-bottom:14px;font-size:12px;line-height:1.5}
 </style></head>
 <body>
@@ -118,8 +148,10 @@
     <a data-tab="docs">Docs</a>
     <a data-tab="graph">Memory Graph</a>
     <a data-tab="code">Code Graph</a>
+    <a data-tab="health">Health Map</a>
     <a data-tab="branches">Repo Graph</a>
     <a id="flushbtn" title="Wipe stored memory/graph so it can be rebuilt from scratch">Flush</a>
+    <a id="themebtn" title="Toggle light / dark">◐ Theme</a>
   </nav>
   <main>
     <header id="hdr">loading…</header>
@@ -140,6 +172,21 @@ async function api(p){
 function esc(s){ return (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
 let activeTab = 'overview';
+// ── theme: light by default, dark on toggle, persisted ──
+(function(){ const t = localStorage.getItem('omni-theme') || 'light';
+  document.documentElement.setAttribute('data-theme', t); })();
+function isDark(){ return document.documentElement.getAttribute('data-theme')==='dark'; }
+// graph colours resolved per theme (SVG attrs can't read CSS vars, so re-render on toggle)
+function TC(){ return isDark()
+  ? {stroke:'#1b1509', link:'#3c3018', linkStrong:'#5c4a29', text:'#b39a6f', muted:'#2f2615', sel:'#e8bd57', label:'#6a5836'}
+  : {stroke:'#fbf5e9', link:'#dcc59a', linkStrong:'#b59a6a', text:'#7c6442', muted:'#e7d8ba', sel:'#8a5412', label:'#b59a6a'}; }
+document.getElementById('themebtn').onclick=()=>{
+  const next = isDark() ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('omni-theme', next);
+  mermaidInit = false;                       // re-init mermaid for the new theme
+  render(activeTab);
+};
 document.querySelectorAll('nav a[data-tab]').forEach(a=>a.onclick=()=>{
   const gs=document.getElementById('gsearch'); if(gs) gs.value='';
   document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on'));
@@ -161,10 +208,10 @@ async function renderSearch(q){
   const memHtml = mm.map(m=>`<div class="sres" data-mem="${esc(m.id)}">
       <div class="sr-h">${m.kind?`<span class="badge k-${esc(m.kind)}">${esc(m.kind)}</span>`:''}
         <span class="sr-mono">memory · [${esc(m.id)}]</span></div>
-      <div style="color:#dcdce0">${esc(m.text)}</div></div>`).join('');
+      <div style="color:var(--fg)">${esc(m.text)}</div></div>`).join('');
   const symHtml = ss.map(s=>`<div class="sres" data-sym="${esc(s.id)}">
       <div class="sr-h"><span class="badge k-${esc(s.kind)}">${esc(s.kind)}</span>
-        <span style="color:#eaeaea">${esc(s.name)}${s.signature?esc(s.signature):''}</span>
+        <span style="color:var(--fg)">${esc(s.name)}${s.signature?esc(s.signature):''}</span>
         <span class="sr-mono">${esc((s.file||'').split('/').pop())}${s.line_start?':'+s.line_start:''}</span></div>
       ${s.doc?`<div style="color:#9a9aa0;font-size:11.5px">${esc(s.doc)}</div>`:''}</div>`).join('');
   view.innerHTML =
@@ -199,6 +246,7 @@ async function render(tab){
     if(tab==='docs') return await renderDocs();
     if(tab==='graph') return await renderGraph();
     if(tab==='code') return await renderCode();
+    if(tab==='health') return await renderHealth();
     if(tab==='branches') return await renderBranches();
   } catch(e){
     view.innerHTML = '<span class="hint">render error in <b>'+esc(tab)+'</b>: '+esc(e.message)+
@@ -221,7 +269,7 @@ async function renderOverview(){
     ${kinds.length?`<div class="sec" style="color:#7c7c82;margin:18px 0 8px">Memory by kind</div>
       <div style="max-width:520px">${kinds.map(([k,n])=>`<div style="display:flex;align-items:center;gap:10px;margin:5px 0">
         <span class="badge k-${esc(k)}" style="width:82px;text-align:center">${esc(k)}</span>
-        <div style="flex:1;background:#141418;border-radius:5px;overflow:hidden"><div style="width:${Math.round(n/maxk*100)}%;background:#2a5a48;height:14px"></div></div>
+        <div style="flex:1;background:var(--panel-2);border-radius:5px;overflow:hidden"><div style="width:${Math.round(n/maxk*100)}%;background:var(--accent);height:14px"></div></div>
         <span class="k" style="width:26px;text-align:right">${n}</span></div>`).join('')}</div>`:''}
     ${(o.top_cited||[]).length?`<div class="sec" style="color:#7c7c82;margin:18px 0 8px">Most-cited memories</div>
       ${o.top_cited.map(t=>`<div class="mem" data-mem="${esc(t.id)}" style="cursor:pointer">
@@ -263,7 +311,7 @@ async function renderDocs(){
     }
     body.className = 'md';
     body.innerHTML = window.marked ? marked.parse(md) : '<pre>'+esc(md)+'</pre>';
-    if(window.mermaid){ if(!mermaidInit){mermaid.initialize({startOnLoad:false,theme:'dark'});mermaidInit=true;}
+    if(window.mermaid){ if(!mermaidInit){mermaid.initialize({startOnLoad:false,theme:isDark()?'dark':'default'});mermaidInit=true;}
       body.querySelectorAll('code.language-mermaid').forEach(async(el,i)=>{
         try{ const {svg}=await mermaid.render('mm'+Date.now()+i, el.textContent); el.parentElement.outerHTML=svg; }catch(e){}
       }); }
@@ -296,7 +344,7 @@ async function renderMemory(){
     .map(m=>`<div class="mem" style="cursor:pointer">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px" data-mem="${esc(m.id)}">
         ${m.kind?`<span class="badge k-${esc(m.kind)}">${esc(m.kind)}</span>`:''}
-        ${m.evidence==='verified'?'<span title="verified by outcome" style="color:#7fe0a8">✓</span>':m.evidence==='inferred'?'<span title="inferred / unconfirmed" style="color:#c8a24a">~</span>':''}
+        ${m.evidence==='verified'?'<span title="verified by outcome" style="color:#8a8a30">✓</span>':m.evidence==='inferred'?'<span title="inferred / unconfirmed" style="color:#c8a24a">~</span>':''}
         <span class="k" style="letter-spacing:.04em">${esc(m.branch)}${m.stale?' · ⚠STALE':''}</span>
         <span class="k" style="margin-left:auto">[${m.id}] ✎</span></div>
       <div class="t" data-mem="${esc(m.id)}">${esc(m.text)}</div>
@@ -359,7 +407,7 @@ async function renderGraph(){
   const svg = d3.select('#g'), gg = svg.append('g');
   const W = svg.node().clientWidth || window.innerWidth, H = svg.node().clientHeight || window.innerHeight;
   svg.call(d3.zoom().scaleExtent([.08,4]).on('zoom',e=>gg.attr('transform',e.transform)));
-  const col = {branch:'#e8e8ea', memory:'#8f9199', file:'#5f6066'};
+  const col = {branch:isDark()?'#e8bd57':'#8a5412', memory:'#9c7b3f', file:'#b59a6a'};
 
   // node size by connectivity so hubs read as hubs
   const deg = {}; links.forEach(l=>{deg[l.source]=(deg[l.source]||0)+1; deg[l.target]=(deg[l.target]||0)+1;});
@@ -376,16 +424,16 @@ async function renderGraph(){
     .force('x', d3.forceX(W/2).strength(.03))
     .force('y', d3.forceY(H/2).strength(.03));
 
-  const link = gg.append('g').attr('stroke','#2b2b31').attr('stroke-width',.9)
+  const link = gg.append('g').attr('stroke',TC().link).attr('stroke-width',.9)
     .selectAll('line').data(links).join('line');
   const node = gg.append('g').selectAll('g').data(nodes).join('g').style('cursor','pointer')
     .call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
       .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
-  node.append('circle').attr('r',rOf).attr('fill',d=>col[d.kind]||'#888')
-    .attr('stroke','#0b0b0c').attr('stroke-width',1.5);
+  node.append('circle').attr('r',rOf).attr('fill',d=>col[d.kind]||'#889')
+    .attr('stroke',TC().stroke).attr('stroke-width',1.5);
   node.append('title').text(d=>d.label);                 // full text on hover
   node.append('text').attr('x',d=>rOf(d)+5).attr('y',3).text(d=>short(d.label))
-    .attr('fill',d=>d.kind==='branch'?'#dcdce0':'#83848a').style('pointer-events','none');
+    .attr('fill',d=>d.kind==='branch'?(isDark()?'#dcdce0':'#1b2330'):TC().text).style('pointer-events','none');
 
   // hover: spotlight a node + its direct neighbours, fade the rest
   const adj = {}; links.forEach(l=>{const a=l.source.id||l.source,b=l.target.id||l.target;
@@ -442,7 +490,7 @@ async function renderBranches(){
       `by status: ${counts.active||0} active · ${counts.dormant||0} dormant · `+
       `${counts.merged||0} merged${counts.abandoned?' · '+counts.abandoned+' abandoned':''}`];
     hdr.innerHTML = `branch: <b>${esc(d.current)}</b> · default: ${esc(def)} · ${parts[0]}`+
-      (hidden ? `  ·  <a id="brtoggle" style="cursor:pointer;color:#57e0a8">`+
+      (hidden ? `  ·  <a id="brtoggle" style="cursor:pointer;color:var(--accent-2)">`+
         (showAll?`show active only`:`show all (${branches.length})`)+`</a>` : '');
 
     // ── git-DAG lane diagram: default branch is the spine, others diverge ──
@@ -450,23 +498,24 @@ async function renderBranches(){
     const ordered = [...shown].sort((a,b)=> (a.name===def?-1:b.name===def?1:(a.created_at||0)-(b.created_at||0)));
     const yOf = {}; ordered.forEach((b,i)=>yOf[b.name]=30+i*rowH);
     const H = 30 + ordered.length*rowH + 20, Wsvg = 900;
-    const col = {merged:'#5f6066', dormant:'#7a7a82', abandoned:'#6a5050', active:'#a9a9af'};
+    const tc=TC();
+    const col = {merged:'#b59a6a', dormant:'#a3907a', abandoned:'#c1522f', active:isDark()?'#e8bd57':'#8a5412'};
     const P=[];
-    P.push(`<line x1="${x0}" y1="${yOf[def]||30}" x2="${x0}" y2="${H-20}" stroke="#3a3a42" stroke-width="2"/>`);
+    P.push(`<line x1="${x0}" y1="${yOf[def]||30}" x2="${x0}" y2="${H-20}" stroke="${tc.linkStrong}" stroke-width="2"/>`);
     ordered.forEach(b=>{
       const y=yOf[b.name], lane = b.name===def?0:1, cx=x0+lane*laneW;
       const baseY = (b.base_branch && yOf[b.base_branch]!=null)?yOf[b.base_branch]:yOf[def];
       if(b.name!==def){
-        P.push(`<path d="M ${x0} ${baseY} C ${x0+laneW} ${baseY}, ${cx} ${y-20}, ${cx} ${y}" fill="none" stroke="#33333b" stroke-width="1.6"/>`);
+        P.push(`<path d="M ${x0} ${baseY} C ${x0+laneW} ${baseY}, ${cx} ${y-20}, ${cx} ${y}" fill="none" stroke="${tc.link}" stroke-width="1.6"/>`);
         if(b.status==='merged'){ const my=yOf[b.into_branch]!=null?yOf[b.into_branch]:yOf[def];
-          P.push(`<path d="M ${cx} ${y} C ${cx} ${y+18}, ${x0+laneW} ${my}, ${x0} ${my}" fill="none" stroke="#2c2c33" stroke-width="1.4" stroke-dasharray="3 3"/>`); }
+          P.push(`<path d="M ${cx} ${y} C ${cx} ${y+18}, ${x0+laneW} ${my}, ${x0} ${my}" fill="none" stroke="${tc.link}" stroke-width="1.4" stroke-dasharray="3 3"/>`); }
       }
       const on = b.name===d.current;
-      P.push(`<circle cx="${cx}" cy="${y}" r="${on?7:5.5}" fill="${on?'#f0f0f2':(col[b.status]||'#a9a9af')}" stroke="#0b0b0c" stroke-width="2"/>`);
+      P.push(`<circle cx="${cx}" cy="${y}" r="${on?7:5.5}" fill="${on?tc.sel:(col[b.status]||'#b59a6a')}" stroke="${tc.stroke}" stroke-width="2"/>`);
       const meta=[b.creator?('by '+esc(b.creator)):'', b.status, b.status==='merged'&&b.into_branch?('→ '+esc(b.into_branch)):'',
         (b.ahead||b.behind)?`(↑${b.ahead||0} ↓${b.behind||0})`:''].filter(Boolean).join('  ·  ');
-      P.push(`<text x="${cx+16}" y="${y-2}" fill="${on?'#f0f0f2':'#d0d0d4'}" font-weight="600">${esc(b.name)}${on?'  ◀ HEAD':''}</text>`);
-      P.push(`<text x="${cx+16}" y="${y+13}" fill="#6c6c72" font-size="10">${meta}</text>`);
+      P.push(`<text x="${cx+16}" y="${y-2}" fill="${on?tc.sel:tc.text}" font-weight="600">${esc(b.name)}${on?'  ◀ HEAD':''}</text>`);
+      P.push(`<text x="${cx+16}" y="${y+13}" fill="${tc.text}" font-size="10">${meta}</text>`);
     });
     view.innerHTML = `<svg viewBox="0 0 ${Wsvg} ${H}" style="height:${H}px;max-width:${Wsvg}px">${P.join('')}</svg>`;
     const t = document.getElementById('brtoggle');
@@ -476,7 +525,7 @@ async function renderBranches(){
 }
 
 // ── Code Graph: functions/classes as nodes, click → dossier inspector ──
-const CODE_COL = {class:'#c9a9f0', function:'#7fe0a8', method:'#8fc7f0', file:'#6b7280'};
+const CODE_COL = {class:'#a86a3c', function:'#96852f', method:'#b07a2e', file:'#a3927a'};
 async function renderCode(){
   if(!window.d3){ view.innerHTML='<span class="hint">code graph needs d3 (offline/blocked CDN).</span>'; return; }
   let g; try{ g = await api('/api/codegraph'); }
@@ -500,18 +549,18 @@ async function renderCode(){
     .force('charge', d3.forceManyBody().strength(-560).distanceMax(1000))
     .force('collide', d3.forceCollide().radius(d=>rOf(d)+38).iterations(2))
     .force('x', d3.forceX(W/2).strength(.04)).force('y', d3.forceY(H/2).strength(.04));
-  const linkStroke = {contains:'#26262c', calls:'#33454f', inherits:'#3a2f4a'};
+  const linkStroke = {contains:TC().link, calls:TC().linkStrong, inherits:isDark()?'#6a4a2a':'#c99a5e'};
   const link = gg.append('g').selectAll('line').data(links).join('line')
-    .attr('stroke',d=>linkStroke[d.rel]||'#2b2b31').attr('stroke-width',d=>d.rel==='calls'?1.3:.9)
+    .attr('stroke',d=>linkStroke[d.rel]||TC().link).attr('stroke-width',d=>d.rel==='calls'?1.3:.9)
     .attr('stroke-dasharray',d=>d.rel==='inherits'?'3 3':null);
   const node = gg.append('g').selectAll('g').data(nodes).join('g').style('cursor','pointer')
     .call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
       .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y;}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
-  node.append('circle').attr('r',rOf).attr('fill',d=>CODE_COL[d.kind]||'#888')
-    .attr('stroke','#0b0b0c').attr('stroke-width',1.5);
+  node.append('circle').attr('r',rOf).attr('fill',d=>CODE_COL[d.kind]||'#889')
+    .attr('stroke',TC().stroke).attr('stroke-width',1.5);
   node.append('title').text(d=>(d.signature?d.name+d.signature:d.name)+'  ·  '+d.file);
   node.append('text').attr('x',d=>rOf(d)+5).attr('y',3).text(d=>short(d.name))
-    .attr('fill','#83848a').style('pointer-events','none');
+    .attr('fill',TC().text).style('pointer-events','none');
   // hover: spotlight a node + everything it connects to (calls/callers/contains),
   // fade the rest — same affordance as the Memory Graph, so you can read the
   // wiring at a glance. Colour edges by relation so calls vs inheritance read.
@@ -525,7 +574,7 @@ async function renderCode(){
     .on('mouseleave',()=>{ node.style('opacity',1);
       link.style('stroke-opacity',1).attr('stroke-width',l=>l.rel==='calls'?1.3:.9); });
   node.on('click',(e,d)=>{ selected=d.id; openInspector(d.id);
-    node.select('circle').attr('stroke',n=>n.id===d.id?'#f0f0f2':'#0b0b0c').attr('stroke-width',n=>n.id===d.id?2.5:1.5); });
+    node.select('circle').attr('stroke',n=>n.id===d.id?TC().sel:TC().stroke).attr('stroke-width',n=>n.id===d.id?2.5:1.5); });
   sim.on('tick',()=>{ link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
       .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
     node.attr('transform',d=>`translate(${d.x},${d.y})`); });
@@ -534,6 +583,116 @@ async function renderCode(){
     const gw=(x1-x0)||1,gh=(y1-y0)||1,pad=260, k=Math.min(3,Math.max(.1,Math.min((W-pad)/gw,(H-pad)/gh)));
     svg.transition().duration(500).call(d3.zoom().on('zoom',ev=>gg.attr('transform',ev.transform)).transform,
       d3.zoomIdentity.translate(W/2-k*(x0+x1)/2,H/2-k*(y0+y1)/2).scale(k)); });
+}
+
+// ── Health Map: the codebase as memory-health "galaxies" ──
+// Each file is a node clustered by module; colour is a single memory-health score
+// on a warm→cool ramp (warm = under-remembered / stale, cool = fresh + trusted);
+// files with no memory are hollow "dark" stars, so blind spots are visible.
+// warm earth ramp: deep rust (under-remembered) → orange → amber → warm olive (healthy)
+const HM_WARMCOOL = ['#a83a26','#cc6b2a','#dca63f','#8a8a30'];
+function hmColor(s){ return d3.scaleLinear().domain([0,.4,.65,1]).range(HM_WARMCOOL).clamp(true)(s); }
+const HM_VERDICT = {fresh:'#8a8a30', drifted:'#dca63f', orphaned:'#a83a26', blind:'#a3907a'};
+
+async function renderHealth(){
+  if(!window.d3){ view.innerHTML='<span class="hint">the Health Map needs d3 (offline/blocked CDN).</span>'; return; }
+  let hm; try{ hm = await api('/api/healthmap'); }
+  catch(e){ view.innerHTML='<span class="hint">health map API failed: '+esc(e.message)+'</span>'; return; }
+  if(!hm.nodes.length){ view.innerHTML='<span class="hint">no code graph yet — build it: <code>omni-memory build</code> (or <code>map</code>).</span>'; return; }
+  const st = hm.stats;
+  hdr.textContent = `${st.files} files · ${st.remembered} remembered · ${st.blind} blind · ${st.drifted} drifted`
+    + (st.orphaned?` · ${st.orphaned} orphaned`:'') + ` · avg health ${Math.round(st.avg_score*100)}%`;
+  // memories per file, for the side panel (scoped to current branch)
+  let mems=[]; try{ mems = await api('/api/memories'); }catch(_){ }
+  const byFile={}; mems.forEach(m=>(m.files||[]).forEach(f=>(byFile[f]=byFile[f]||[]).push(m)));
+
+  view.innerHTML = '<svg id="hm"></svg>'
+    + '<div id="hmlegend" style="position:absolute;left:22px;bottom:18px;display:flex;align-items:center;gap:14px;'
+    + 'font-size:11px;color:var(--fg-2);background:color-mix(in srgb,var(--panel) 88%,transparent);'
+    + 'padding:7px 12px;border:1px solid var(--border);border-radius:9px;box-shadow:0 2px 8px var(--shadow)">'
+    + '<span>under-remembered / stale</span>'
+    + '<span style="width:150px;height:9px;border-radius:5px;display:inline-block;'
+    + 'background:linear-gradient(90deg,'+HM_WARMCOOL.join(',')+')"></span>'
+    + '<span>fresh &amp; trusted</span>'
+    + '<span style="margin-left:8px;display:inline-flex;align-items:center;gap:5px">'
+    + '<span style="width:9px;height:9px;border-radius:50%;border:1.5px solid var(--link-strong);display:inline-block"></span>no memory (blind)</span>'
+    + '</div>';
+  const svg=d3.select('#hm'), gg=svg.append('g');
+  const W=svg.node().clientWidth||window.innerWidth, H=svg.node().clientHeight||window.innerHeight;
+  svg.call(d3.zoom().scaleExtent([.05,5]).on('zoom',e=>gg.attr('transform',e.transform)));
+
+  const nodes=hm.nodes.map(d=>({...d}));
+  const idset=new Set(nodes.map(n=>n.id));
+  const links=hm.edges.filter(e=>idset.has(e.src)&&idset.has(e.dst)).map(e=>({source:e.src,target:e.dst,w:e.w}));
+  const rOf=d=>Math.min(22,3+Math.sqrt(d.size||1)*1.7);
+
+  // cluster (galaxy) anchors on a grid — the force pulls each file toward its module
+  const cl=hm.clusters, cols=Math.max(1,Math.ceil(Math.sqrt(cl.length))), rows=Math.ceil(cl.length/cols);
+  const ax={},ay={}; cl.forEach((c,i)=>{ ax[c]=((i%cols)+.5)/cols*W; ay[c]=((Math.floor(i/cols))+.5)/rows*H; });
+  const sim=d3.forceSimulation(nodes)
+    .force('x',d3.forceX(d=>ax[d.cluster]).strength(.32))
+    .force('y',d3.forceY(d=>ay[d.cluster]).strength(.32))
+    .force('charge',d3.forceManyBody().strength(-7))
+    .force('collide',d3.forceCollide(d=>rOf(d)+1.4).iterations(2));
+
+  const link=gg.append('g').selectAll('line').data(links).join('line')
+    .attr('stroke',TC().link).attr('stroke-opacity',.5).attr('stroke-width',d=>Math.min(2,.5+d.w*.25));
+  const glab=gg.append('g').selectAll('text').data(cl).join('text')
+    .attr('x',d=>ax[d]).attr('y',d=>ay[d]).text(d=>d).attr('text-anchor','middle')
+    .attr('fill',TC().label).style('font-size','12px').style('letter-spacing','.08em')
+    .style('pointer-events','none').style('text-transform','uppercase');
+  const blindStroke=TC().linkStrong, ringStroke=isDark()?'rgba(0,0,0,.35)':'rgba(20,30,45,.22)';
+  const node=gg.append('g').selectAll('circle').data(nodes).join('circle')
+    .attr('r',rOf).style('cursor','pointer')
+    .attr('fill',d=>d.score==null?TC().muted:hmColor(d.score))
+    .attr('stroke',d=>d.protected?'#e6c34a':(d.score==null?blindStroke:ringStroke))
+    .attr('stroke-width',d=>d.protected?2:1.2)
+    .attr('opacity',d=>d.score==null?.55:.97);
+  node.append('title').text(d=>d.id+(d.score==null?'  ·  no memory (blind spot)'
+    :`  ·  health ${Math.round(d.score*100)}% · ${d.verdict} · ${d.mem} memor${d.mem===1?'y':'ies'}`
+      +(d.stale?` · ${d.stale} stale`:'')));
+
+  let sel=null;
+  node.on('click',(e,d)=>{ sel=d.id; node.attr('stroke',n=>n.id===sel?TC().sel:(n.protected?'#e6c34a':(n.score==null?blindStroke:ringStroke)))
+      .attr('stroke-width',n=>n.id===sel?2.6:(n.protected?2:1.2));
+    openHealthPanel(d, byFile[d.id]||[]); });
+
+  sim.on('tick',()=>{ link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    node.attr('cx',d=>d.x).attr('cy',d=>d.y); });
+  sim.on('end',()=>{ const xs=nodes.map(n=>n.x),ys=nodes.map(n=>n.y);
+    const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+    const gw=(x1-x0)||1,gh=(y1-y0)||1,pad=160,k=Math.min(2.5,Math.max(.08,Math.min((W-pad)/gw,(H-pad)/gh)));
+    svg.transition().duration(600).call(d3.zoom().on('zoom',ev=>gg.attr('transform',ev.transform)).transform,
+      d3.zoomIdentity.translate(W/2-k*(x0+x1)/2,H/2-k*(y0+y1)/2).scale(k)); });
+}
+
+function openHealthPanel(d, list){
+  insp.classList.add('open');
+  const vc = HM_VERDICT[d.verdict]||'#8a8b92';
+  const pct = d.score==null?'—':Math.round(d.score*100)+'%';
+  const evMark = m => m.evidence==='verified'?' ✓':m.evidence==='inferred'?' ~':'';
+  const rows = (list||[]).slice(0,40).map(m=>
+    `<div style="padding:8px 0;border-top:1px solid var(--border)">
+       <span class="chip" data-goto-mem="${esc(m.id)}" style="cursor:pointer">${esc(m.id)}</span>
+       <span style="color:var(--fg-2)">${esc(m.kind)}${evMark(m)}${m.stale?' ⚠STALE':''}${m.protected?' 🔒':''}</span>
+       <div style="margin-top:4px;color:var(--fg)">${esc(m.text)}</div>
+       ${m.author?`<div style="margin-top:3px;color:var(--fg-3);font-size:11px">by ${esc(m.author)}</div>`:''}
+     </div>`).join('') || '<div style="padding:10px 0;color:var(--fg-2)">no memory anchored to this file — a blind spot.</div>';
+  insp.innerHTML = `<div class="ibody">
+    <div class="iclose" style="cursor:pointer;float:right;color:var(--fg-2);font-size:18px">×</div>
+    <div style="font-size:11px;letter-spacing:.09em;color:var(--fg-2)">FILE MEMORY</div>
+    <h3 style="margin:6px 0 4px;font-size:14px;color:var(--fg);word-break:break-all">${esc(d.id)}</h3>
+    <div style="display:flex;align-items:center;gap:10px;margin:8px 0 4px">
+      <span style="width:12px;height:12px;border-radius:50%;background:${d.score==null?'var(--node-muted)':hmColor(d.score)};border:1px solid ${vc}"></span>
+      <b style="color:${vc}">${d.verdict}</b>
+      <span style="color:var(--fg-2)">health ${pct} · ${d.mem} memor${d.mem===1?'y':'ies'}${d.stale?` · ${d.stale} stale`:''}${d.verified?` · ${d.verified} verified`:''}</span>
+    </div>
+    ${rows}
+  </div>`;
+  insp.querySelector('.iclose').onclick = closeInspector;
+  insp.querySelectorAll('[data-goto-mem]').forEach(el=>el.onclick=()=>{
+    activeTab='memory'; document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on'));
+    document.querySelector('nav a[data-tab="memory"]').classList.add('on'); render('memory'); });
 }
 
 // ── Inspector: the readable node dossier ──
@@ -547,7 +706,7 @@ function fileLink(file, line){
   if(!META.root||!file) return '';
   const abs = META.root.replace(/\/$/,'')+'/'+file;
   const url = EDITORS[editorScheme()]+'/'+abs+(line?':'+line:'');
-  return `<a href="${esc(url)}" title="open in ${editorScheme()}" style="color:#8fc7f0;text-decoration:none">${esc(file)}${line?':'+line:''} ↗</a>`;
+  return `<a href="${esc(url)}" title="open in ${editorScheme()}" style="color:var(--accent-2);text-decoration:none">${esc(file)}${line?':'+line:''} ↗</a>`;
 }
 (async()=>{ try{ META = await api('/api/meta'); }catch(e){} })();
 async function post(path, body){
