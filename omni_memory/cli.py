@@ -113,6 +113,56 @@ def cmd_lock(args):
     return 0 if ok else 1
 
 
+def cmd_conflicts(args):
+    """`conflicts` — memories that contradict each other on the same symbol after a
+    branch merge. Resolve with `omni-memory resolve <id> [--keep|--both]`."""
+    s, root = _store()
+    branchmod.refresh_if_stale(s, root)             # detect merges since last refresh
+    conf = s.open_conflicts()
+    if not conf:
+        print("no open conflicts.")
+        return 0
+    for c in conf:
+        a, b = c["a"], c["b"]
+        print(f"\n⚠ conflict on {c['anchor']}  ({', '.join(a['files'][:2])})")
+        for m in (a, b):
+            who = f" · by {m['author']}" if m.get("author") else ""
+            print(f"   [{m['id']}] ({m['branch']}){who}: {m['text']}")
+        print(f"   → keep one:  omni-memory resolve <{a['id']}|{b['id']}> --keep"
+              f"   ·   both true:  omni-memory resolve {a['id']} --both")
+    return 0
+
+
+def cmd_resolve(args):
+    """`resolve <id> [--keep|--both]` — settle every conflict this memory is in.
+    --keep: this memory wins (its partner is superseded). --both: keep both."""
+    s, _ = _store()
+    keep = not getattr(args, "both", False)         # default is --keep (pick this one)
+    n = s.resolve_conflict(args.id, keep=keep)
+    if not n:
+        print(f"[{args.id}] is not in any open conflict.")
+        return 1
+    print(f"[+] resolved {n} conflict(s) — " + ("kept this memory, superseded the other(s)"
+          if keep else "kept both, cleared the flag"))
+    return 0
+
+
+def cmd_history(args):
+    """`history <id>` — the supersession lineage of a memory (what it replaced and
+    what replaced it), oldest → newest."""
+    s, _ = _store()
+    chain = s.history(args.id)
+    if not chain:
+        print(f"no memory with id {args.id}"); return 1
+    import time as _t
+    for i, m in enumerate(chain):
+        arrow = "└─▶ " if i else "    "
+        when = _t.strftime("%Y-%m-%d", _t.localtime(m.get("updated") or m.get("created") or 0))
+        mark = " (current)" if m["status"] == "active" else f" ({m['status']})"
+        print(f"{arrow}[{m['id']}] {when}{mark}: {m['text']}")
+    return 0
+
+
 def cmd_capture(args):
     """Ingest the agent's extraction JSON (stdin) → memories."""
     s, root = _store()
@@ -880,6 +930,11 @@ def main(argv=None):
     r.add_argument("text", nargs="+")
     lk = sub.add_parser("lock"); lk.add_argument("id")
     ul = sub.add_parser("unlock"); ul.add_argument("id")
+    sub.add_parser("conflicts")
+    rs = sub.add_parser("resolve"); rs.add_argument("id")
+    rs.add_argument("--keep", action="store_true", help="this memory wins (default)")
+    rs.add_argument("--both", action="store_true", help="keep both; just clear the flag")
+    hs = sub.add_parser("history"); hs.add_argument("id")
     sub.add_parser("share"); sub.add_parser("sync"); sub.add_parser("team")
     sub.add_parser("capture")
     ij = sub.add_parser("inject"); ij.add_argument("query", nargs="*"); ij.add_argument("--file", action="append")
@@ -934,6 +989,7 @@ def main(argv=None):
         "recall": cmd_recall, "branches": cmd_branches,
         "forget": cmd_forget, "used": cmd_used, "gc": cmd_gc, "restore": cmd_restore,
         "lock": cmd_lock, "unlock": cmd_lock,
+        "conflicts": cmd_conflicts, "resolve": cmd_resolve, "history": cmd_history,
         "share": cmd_share, "sync": cmd_sync, "team": cmd_team,
         "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
         "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,

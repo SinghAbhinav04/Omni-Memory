@@ -81,6 +81,11 @@ session ends.
   unmerged, or long dormant) and long-stale/uncited memories are auto-quarantined
   (reversible), so false memory doesn't live forever. Memories the agent keeps
   citing are shielded. `gc --dry-run` previews; hard-delete stays human-gated.
+- **Merge reconciliation** — because merges are known from git, when a branch merges
+  its memories are reconciled onto the base: duplicates collapse automatically, and
+  memories that *contradict* the base on the same symbol are flagged as **conflicts**
+  (`omni-memory conflicts` / `resolve <id> [--keep|--both]`) with a `⚠CONFLICT`
+  marker in the injected block. `omni-memory history <id>` shows the supersession lineage.
 - **Team sharing (git-native)** — `omni-memory share` writes your memories to a
   committed per-author shard under `.omni-memory/team/`. Because each teammate
   owns a distinct file, it merges with **zero conflicts**; a `git pull` syncs the
@@ -110,6 +115,11 @@ omni-memory map              # (re)build the knowledge + tree-sitter code graph
 omni-memory check            # re-anchor vs git; flag ⚠ stale memories (symbol-level)
 omni-memory gc [--dry-run] [--purge]         # quarantine dead/false memory
 omni-memory usage [--max-items N] [--budget C]   # per-prompt token footprint + tune
+
+# merges / conflicts
+omni-memory conflicts        # memories that contradict each other after a branch merge
+omni-memory resolve <id> [--keep|--both]     # settle a conflict (winner supersedes, or keep both)
+omni-memory history <id>     # supersession lineage: what a memory replaced, and what replaced it
 
 # team / sharing / reset
 omni-memory share            # write your committed per-author memory shard (git-merge-safe)

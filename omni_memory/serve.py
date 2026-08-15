@@ -104,6 +104,11 @@ def _handler(root: Path):
                     n = store.merge_memories(b.get("keep", ""), b.get("drop", []))
                     _sync_docs(store, root)
                     return self._send(200, json.dumps({"ok": True, "archived": n}))
+                if u.path == "/api/conflict/resolve":
+                    b = self._body()
+                    n = store.resolve_conflict(b.get("id", ""), keep=not b.get("both"))
+                    _sync_docs(store, root)
+                    return self._send(200, json.dumps({"ok": bool(n), "resolved": n}))
                 if u.path == "/api/doc/save":
                     b = self._body()
                     name = b.get("name", "")
@@ -174,6 +179,10 @@ def _handler(root: Path):
             if u.path == "/api/healthmap":
                 from . import healthmap
                 return self._send(200, json.dumps(healthmap.build(store, root)))
+            if u.path == "/api/conflicts":
+                return self._send(200, json.dumps({"conflicts": store.open_conflicts()}))
+            if u.path == "/api/history":
+                return self._send(200, json.dumps({"chain": store.history(q.get("id", [""])[0])}))
             if u.path == "/api/symbol":
                 sid = q.get("id", [""])[0]
                 dossier = store.symbol_dossier(sid)

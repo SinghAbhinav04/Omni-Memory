@@ -106,6 +106,9 @@ CREATE TABLE IF NOT EXISTS memory(
   blob_shas TEXT, protected INTEGER DEFAULT 0, author TEXT);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, branch TEXT, summary TEXT);
+CREATE TABLE IF NOT EXISTS conflicts(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT, b TEXT, anchor TEXT,
+  created REAL, resolved INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS branches(
   name TEXT PRIMARY KEY, creator TEXT, created_at REAL, base_branch TEXT,
   ahead INTEGER, behind INTEGER, status TEXT, merged_at REAL,
@@ -375,12 +378,137 @@ class Store:
         self.db.commit()
         return cur.rowcount > 0
 
-    def reanchor_branch(self, frm: str, to: str) -> int:
-        """Re-tag a merged branch's active memories onto the base branch."""
-        cur = self.db.execute(
-            "UPDATE memory SET branch=? WHERE branch=? AND status='active'", (to, frm))
+    def reanchor_branch(self, frm: str, to: str) -> dict:
+        """Re-tag a merged branch's active memories onto the base — and reconcile
+        each one against what's already there. Because we KNOW `frm` merged into
+        `to`, a memory arriving from it that restates a base memory is a duplicate
+        (auto-collapsed), and one that contradicts a base memory on the same symbol
+        is a conflict (flagged for `resolve`). Returns {moved, deduped, conflicts}."""
+        incoming = [self._row_to_mem(r) for r in self.db.execute(
+            "SELECT * FROM memory WHERE branch=? AND status='active'", (frm,)).fetchall()]
+        moved = deduped = conflicts = 0
+        for m in incoming:
+            self.db.execute("UPDATE memory SET branch=? WHERE id=?", (to, m["id"]))
+            moved += 1
+            outcome = self._reconcile_incoming(m, to)
+            deduped += outcome == "dedup"
+            conflicts += outcome == "conflict"
         self.db.commit()
-        return cur.rowcount
+        return {"moved": moved, "deduped": deduped, "conflicts": conflicts}
+
+    def _reconcile_incoming(self, m: dict, base: str) -> Optional[str]:
+        """Compare a just-merged memory `m` (now on `base`) against existing base
+        memories of the same kind. Duplicate → supersede one; contradiction on a
+        shared symbol (claim-kinds only) → record a conflict. Returns the outcome."""
+        key = _norm(m["text"])
+        m_syms, m_files = set(m.get("symbols") or []), set(m.get("files") or [])
+        m_rank = _EVIDENCE_RANK.get(m.get("evidence"), 1)
+        m_uses = m.get("uses") or 0
+        rows = self.db.execute(
+            "SELECT id,text,symbols,files,evidence,COALESCE(uses,0) uses "
+            "FROM memory WHERE branch=? AND kind=? AND status='active' AND id!=?",
+            (base, m["kind"], m["id"])).fetchall()
+        for r in rows:
+            other = _norm(r["text"])
+            r_syms = set(json.loads(r["symbols"] or "[]"))
+            r_files = set(json.loads(r["files"] or "[]"))
+            same_anchor = ((m_syms and m_syms == r_syms) or
+                           (not m_syms and not r_syms and m_files and m_files == r_files))
+            # DEDUP: near-identical restatement of the same fact → keep the stronger
+            if _similar(key, other, 0.72) or (same_anchor and _similar(key, other, 0.5)):
+                r_rank = _EVIDENCE_RANK.get(r["evidence"], 1)
+                # keep the cited / higher-warrant one; else keep the incoming
+                if r["uses"] > m_uses or r_rank > m_rank:
+                    loser = m["id"]
+                elif m_uses > r["uses"] or m_rank > r_rank:
+                    loser = r["id"]
+                else:
+                    loser = r["id"]                # tie → keep incoming (newer)
+                keeper = r["id"] if loser == m["id"] else m["id"]
+                now = time.time()
+                self.db.execute("UPDATE memory SET status='superseded',updated=? WHERE id=?",
+                                (now, loser))
+                self.db.execute("UPDATE memory SET supersedes_id=?,updated=? WHERE id=?",
+                                (loser, now, keeper))
+                return "dedup"
+            # CONFLICT: same symbol, claim-kind, different claim (not a duplicate)
+            shared_sym = bool(m_syms and (m_syms & r_syms))
+            if shared_sym and m["kind"] in _CONFLICT_KINDS:
+                anchor = ", ".join(sorted(m_syms & r_syms))
+                self.record_conflict(m["id"], r["id"], anchor)
+                return "conflict"
+        return None
+
+    # -- conflicts (merge reconciliation) -----------------------------------
+    def record_conflict(self, a: str, b: str, anchor: str) -> None:
+        # dedupe the pair (unordered) so the same conflict isn't logged twice
+        lo, hi = sorted((a, b))
+        if self.db.execute("SELECT 1 FROM conflicts WHERE a=? AND b=? AND resolved=0",
+                           (lo, hi)).fetchone():
+            return
+        self.db.execute("INSERT INTO conflicts(a,b,anchor,created,resolved) VALUES(?,?,?,?,0)",
+                        (lo, hi, anchor, time.time()))
+
+    def conflict_member_ids(self) -> set:
+        """Ids in an unresolved conflict — for the ⚠CONFLICT inject marker."""
+        out = set()
+        for r in self.db.execute("SELECT a,b FROM conflicts WHERE resolved=0"):
+            out.add(r["a"]); out.add(r["b"])
+        return out
+
+    def open_conflicts(self) -> list[dict]:
+        """Unresolved conflicts joined to both memories, newest first."""
+        out = []
+        for c in self.db.execute(
+                "SELECT id,a,b,anchor,created FROM conflicts WHERE resolved=0 ORDER BY id DESC"):
+            ma, mb = self.get_memory(c["a"]), self.get_memory(c["b"])
+            if not ma or not mb:                   # a member was deleted → auto-resolve
+                self.db.execute("UPDATE conflicts SET resolved=1 WHERE id=?", (c["id"],))
+                continue
+            out.append({"id": c["id"], "anchor": c["anchor"], "a": ma, "b": mb})
+        self.db.commit()
+        return out
+
+    def resolve_conflict(self, mem_id: str, keep: bool) -> int:
+        """Resolve every open conflict `mem_id` is in. keep=True → this memory wins:
+        supersede its partner(s). keep=False (both) → just clear the flag, keep both."""
+        n = 0
+        for c in self.db.execute(
+                "SELECT id,a,b FROM conflicts WHERE resolved=0 AND (a=? OR b=?)",
+                (mem_id, mem_id)).fetchall():
+            partner = c["b"] if c["a"] == mem_id else c["a"]
+            if keep:                               # this memory wins → retire the partner
+                now = time.time()
+                cur = self.db.execute("UPDATE memory SET status='superseded',updated=? "
+                                      "WHERE id=? AND status='active'", (now, partner))
+                if cur.rowcount:
+                    self.db.execute("UPDATE memory SET supersedes_id=?,updated=? WHERE id=?",
+                                    (partner, now, mem_id))
+            self.db.execute("UPDATE conflicts SET resolved=1 WHERE id=?", (c["id"],))
+            n += 1
+        self.db.commit()
+        return n
+
+    def history(self, mem_id: str) -> list[dict]:
+        """The supersession lineage around a memory (what it replaced, and what
+        replaced it), oldest → newest, via the `supersedes_id` chain."""
+        seen, chain = set(), []
+        # walk backwards: this memory and everything it superseded
+        cur = self.get_memory(mem_id)
+        while cur and cur["id"] not in seen:
+            seen.add(cur["id"]); chain.append(cur)
+            prev = cur.get("supersedes_id")
+            cur = self.get_memory(prev) if prev else None
+        chain.reverse()
+        # walk forwards: memories that superseded this one
+        nxt = mem_id
+        while True:
+            r = self.db.execute("SELECT id FROM memory WHERE supersedes_id=? LIMIT 1",
+                                (nxt,)).fetchone()
+            if not r or r["id"] in seen:
+                break
+            m = self.get_memory(r["id"]); seen.add(m["id"]); chain.append(m); nxt = m["id"]
+        return chain
 
     def quarantine(self, mem_id: str, reason: str) -> None:
         self.db.execute(
@@ -659,9 +787,9 @@ class Store:
           graph  → code graph only (code_nodes/code_edges)
         """
         groups = {
-            "memory": ["memory", "flows", "events"],
+            "memory": ["memory", "flows", "events", "conflicts"],
             "graph": ["code_nodes", "code_edges"],
-            "all": ["memory", "flows", "events", "branches", "commits",
+            "all": ["memory", "flows", "events", "conflicts", "branches", "commits",
                     "code_nodes", "code_edges"],
         }
         tables = groups.get(scope, groups["all"])
@@ -723,6 +851,12 @@ def _similar(a: str, b: str, thresh: float = 0.72) -> bool:
     jacc = len(ta & tb) / len(ta | tb)
     return jacc >= thresh
 
+
+# Kinds where one symbol usually has ONE answer, so two differing claims on the
+# same symbol are a genuine contradiction worth flagging. Additive kinds
+# (gotcha/flow/endpoint/component/event/todo/assumption) can legitimately have many
+# per symbol, so they're excluded to keep conflict detection from crying wolf.
+_CONFLICT_KINDS = {"decision", "db", "fact", "concept"}
 
 # -- trust tier (reserved keyspace) -----------------------------------------
 _EVIDENCE_RANK = {"verified": 2, "stated": 1, "inferred": 0}

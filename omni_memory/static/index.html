@@ -149,6 +149,7 @@
     <a data-tab="graph">Memory Graph</a>
     <a data-tab="code">Code Graph</a>
     <a data-tab="health">Health Map</a>
+    <a data-tab="conflicts">Conflicts</a>
     <a data-tab="branches">Repo Graph</a>
     <a id="flushbtn" title="Wipe stored memory/graph so it can be rebuilt from scratch">Flush</a>
     <a id="themebtn" title="Toggle light / dark">◐ Theme</a>
@@ -247,6 +248,7 @@ async function render(tab){
     if(tab==='graph') return await renderGraph();
     if(tab==='code') return await renderCode();
     if(tab==='health') return await renderHealth();
+    if(tab==='conflicts') return await renderConflicts();
     if(tab==='branches') return await renderBranches();
   } catch(e){
     view.innerHTML = '<span class="hint">render error in <b>'+esc(tab)+'</b>: '+esc(e.message)+
@@ -583,6 +585,29 @@ async function renderCode(){
     const gw=(x1-x0)||1,gh=(y1-y0)||1,pad=260, k=Math.min(3,Math.max(.1,Math.min((W-pad)/gw,(H-pad)/gh)));
     svg.transition().duration(500).call(d3.zoom().on('zoom',ev=>gg.attr('transform',ev.transform)).transform,
       d3.zoomIdentity.translate(W/2-k*(x0+x1)/2,H/2-k*(y0+y1)/2).scale(k)); });
+}
+
+// ── Conflicts: memories that contradict each other after a branch merge ──
+async function renderConflicts(){
+  let r; try{ r = await api('/api/conflicts'); }
+  catch(e){ view.innerHTML='<span class="hint">conflicts API failed: '+esc(e.message)+'</span>'; return; }
+  const conf = r.conflicts||[];
+  hdr.textContent = conf.length ? conf.length+' open conflict(s) — pick a winner or keep both' : 'no open conflicts';
+  if(!conf.length){ view.innerHTML='<span class="hint">No conflicts. When a merged branch\'s memory contradicts the base on the same symbol, it shows up here to resolve.</span>'; return; }
+  const card = m => `<div style="flex:1;border:1px solid var(--border);border-radius:9px;padding:10px 12px;background:var(--panel)">
+      <div style="font-size:10px;color:var(--fg-3);font-family:var(--mono)">[${esc(m.id)}] · ${esc(m.branch)}${m.author?' · by '+esc(m.author):''}</div>
+      <div style="margin-top:4px;color:var(--fg)">${esc(m.text)}</div>
+      <button class="btn" data-keep="${esc(m.id)}" style="margin-top:8px;font-size:11px;padding:5px 12px">Keep this</button>
+    </div>`;
+  view.innerHTML = conf.map(c=>`<div class="mem" style="border-color:color-mix(in srgb,#c1522f 40%,var(--panel))">
+      <div class="k" style="color:#c1522f">⚠ conflict on ${esc(c.anchor||'the same symbol')}</div>
+      <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap">${card(c.a)}${card(c.b)}</div>
+      <button class="btn sec" data-both="${esc(c.a.id)}" style="margin-top:10px;font-size:11px;padding:5px 12px">Keep both (they're both true)</button>
+    </div>`).join('');
+  const act = async (id, both) => { await fetch('/api/conflict/resolve',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({id,both})}); render('conflicts'); };
+  view.querySelectorAll('[data-keep]').forEach(b=>b.onclick=()=>act(b.dataset.keep,false));
+  view.querySelectorAll('[data-both]').forEach(b=>b.onclick=()=>act(b.dataset.both,true));
 }
 
 // ── Health Map: the codebase as memory-health "galaxies" ──

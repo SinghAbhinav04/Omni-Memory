@@ -93,7 +93,11 @@ def classify_branches(store: Store, root: Path) -> list[tuple]:
             continue
         st = recorded.get(name, "active")
         if st == "merged":
-            store.reanchor_branch(name, base)  # idempotent
+            rec = store.reanchor_branch(name, base)  # idempotent; reconciles on move
+            if rec.get("deduped") or rec.get("conflicts"):
+                store.add_event(base, f"merged {name}: {rec['deduped']} duplicate(s) collapsed"
+                                + (f", ⚠ {rec['conflicts']} conflict(s) to resolve"
+                                   if rec['conflicts'] else ""))
             continue
         if name not in live:                    # deleted while unmerged
             new = "abandoned"

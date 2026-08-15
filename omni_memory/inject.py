@@ -115,7 +115,8 @@ def build_block(store: Store, root: Path, query: str = "",
         ENFORCE_RULES,
         "",
     ]
-    used, budget, has_external, has_inferred = 0, char_budget, False, False
+    conflicted = store.conflict_member_ids()      # ids in an unresolved merge conflict
+    used, budget, has_external, has_inferred, has_conflict = 0, char_budget, False, False, False
     for m in mems:
         tag = f"[{m['id']}]"
         where = (" · " + ", ".join(m["files"][:2])) if m["files"] else ""
@@ -132,6 +133,10 @@ def build_block(store: Store, root: Path, query: str = "",
             br = "" if cur != "*" else f" ({m['branch']})"
         stale = " ⚠STALE" if m.get("stale") else ""
         lock = " 🔒" if m.get("protected") else ""
+        conflict = ""
+        if m["id"] in conflicted:                 # contradicts another memory post-merge
+            conflict = " ⚠CONFLICT"
+            has_conflict = True
         # evidence: how it was learned. ✓ = confirmed by outcome (trust it);
         # ~ = inferred/unconfirmed (weigh lightly). stated → no marker.
         ev = {"verified": " ✓", "inferred": " ~"}.get(m.get("evidence"), "")
@@ -139,12 +144,16 @@ def build_block(store: Store, root: Path, query: str = "",
             has_inferred = True
         chain = "↳ " if m.get("_chain") else ""   # a linked chain member of a pick above
         text = _clip(m["text"], _TEXT_CAP)
-        line = f"{chain}{tag}{ev}{lock} {m['kind']}{br}{stale}: {text}{where}"
+        line = f"{chain}{tag}{ev}{lock} {m['kind']}{br}{stale}{conflict}: {text}{where}"
         if used and budget - len(line) < 0:   # keep at least one; then honor budget
             break
         lines.append(line)
         budget -= len(line)
         used += 1
+    if has_conflict:
+        lines.insert(3, "Note: ⚠CONFLICT items contradict another memory on the same "
+                        "symbol after a branch merge — do NOT trust one blindly; re-verify "
+                        "against the code and resolve with `omni-memory resolve <id>`.")
     if has_inferred:
         lines.insert(3, "Note: ✓ = verified by outcome (trust it); ~ = inferred/"
                         "unconfirmed (weigh lightly, re-verify before relying).")
