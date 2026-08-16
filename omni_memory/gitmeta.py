@@ -42,17 +42,24 @@ def git_user(root: Path) -> str:
 
 
 def blob_sha(root: Path, path: str) -> str:
-    """The git blob object id of `path` at HEAD (40-hex), or '' if the path is
-    untracked or absent. Content identity, not location: identical content →
-    identical sha, so a changed sha is exact whole-file drift and a missing object
-    is exact deletion — no diff heuristic, no TTL."""
-    sha = _git(root, "rev-parse", f"HEAD:{path}")
+    """Git blob id of the bytes of `path` AS THEY EXIST IN THE WORKING TREE — i.e.
+    what the agent actually read, committed or not. `git hash-object` computes the
+    same id git would assign that content, so provenance binds to the *observed*
+    bytes rather than the committed HEAD blob (which can differ mid-session, when the
+    working tree is dirty) — and it also covers uncommitted / untracked files, which
+    a `HEAD:<path>` lookup misses entirely. '' if the path is absent. Identical
+    content → identical id, so a changed id is exact drift and a missing file is exact
+    deletion — no diff heuristic, no TTL."""
+    if not (root / path).is_file():
+        return ""
+    sha = _git(root, "hash-object", "--", path)
     return sha if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha) else ""
 
 
 def blob_shas(root: Path, paths) -> dict:
-    """{path: blob sha} for the tracked paths among `paths` (untracked ones are
-    omitted). Recorded at capture so staleness can be verified by re-resolution."""
+    """{path: observed-content id} for the existing files among `paths` — the digest
+    of the working-tree bytes the agent saw at capture (see `blob_sha`), so staleness
+    is verified against the actual observation, including uncommitted work."""
     out = {}
     for p in paths or []:
         sha = blob_sha(root, p)

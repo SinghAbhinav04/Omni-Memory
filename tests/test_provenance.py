@@ -70,6 +70,42 @@ def test_blob_sha_recorded_and_verdicts(store, repo):
     assert store.get_memory(m.id)["stale"]                       # orphan flagged stale
 
 
+def test_provenance_binds_to_observed_working_tree_not_head(repo):
+    """Negative control (the between-commits case Claude Code lives in): a memory
+    captured from UNCOMMITTED working-tree bytes must record those bytes' id, not the
+    committed HEAD blob — otherwise the locator re-fetches the wrong observation."""
+    import subprocess
+    from omni_memory.store import Store
+    (repo / "cfg.py").write_text("value = 'A'\n")
+    _commit(repo, "commit A")
+    head_a = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD:cfg.py"],
+                            capture_output=True, text=True).stdout.strip()
+    (repo / "cfg.py").write_text("value = 'B'\n")          # working-tree edit, NOT committed
+    s = Store(repo)
+    m = sm.remember(s, repo, "cfg default is B", kind="fact", files=["cfg.py"], source="manual")
+    observed = s.get_memory(m.id)["blob_shas"]["cfg.py"]
+    assert observed != head_a                              # NOT the committed HEAD blob (A)
+    assert observed == gitmeta.blob_sha(repo, "cfg.py")    # the OBSERVED working-tree id (B)
+    # states stay distinguishable: committing B is still fresh; editing → drift; delete → orphan
+    _commit(repo, "commit B")
+    assert staleness.reconcile(s, repo)["fresh"] >= 1
+    (repo / "cfg.py").write_text("value = 'C'\n"); _commit(repo, "commit C")
+    assert staleness.reconcile(s, repo)["drifted"] >= 1
+    (repo / "cfg.py").unlink(); _commit(repo, "rm cfg")
+    assert staleness.reconcile(s, repo)["orphaned"] >= 1
+
+
+def test_provenance_covers_untracked_file(repo):
+    """A brand-new untracked file the agent just wrote is still anchorable — the old
+    HEAD:<path> lookup returned nothing for these (they were silently uncheckable)."""
+    from omni_memory.store import Store
+    (repo / "brand_new.py").write_text("def just_written():\n    return 1\n")  # never added
+    s = Store(repo)
+    m = sm.remember(s, repo, "just_written returns 1", kind="fact",
+                    files=["brand_new.py"], source="manual")
+    assert s.get_memory(m.id)["blob_shas"].get("brand_new.py")   # observed, despite untracked
+
+
 def test_legacy_memory_is_uncheckable_not_counted(store, repo):
     """A memory with no recorded blob sha resolves by name but can't be content-
     verified — it must be UNCHECKABLE, never inflate re-fetch coverage."""
