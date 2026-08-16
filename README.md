@@ -81,6 +81,11 @@ session ends.
   unmerged, or long dormant) and long-stale/uncited memories are auto-quarantined
   (reversible), so false memory doesn't live forever. Memories the agent keeps
   citing are shielded. `gc --dry-run` previews; hard-delete stays human-gated.
+- **Observation-bound provenance** — a read-time hook hashes files as the agent
+  actually reads/edits them, so a memory is anchored to the **bytes it was derived
+  from**, not the file at session-end. `doctor` reports it as its own axis (separate
+  from re-fetchability): `observed` vs `declared`, and flags `UNBOUND_CAPTURE` when a
+  source moved between when it was read and when it was captured.
 - **Merge reconciliation** — because merges are known from git, when a branch merges
   its memories are reconciled onto the base: duplicates collapse automatically, and
   memories that *contradict* the base on the same symbol are flagged as **conflicts**

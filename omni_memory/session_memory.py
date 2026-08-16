@@ -73,12 +73,38 @@ def remember(store: Store, root: Path, text: str, kind: str = "fact",
     evidence = clamp_evidence(evidence, source)
     # Exact content identity for each anchored file, so staleness is re-fetchable
     # (blob sha match/miss) rather than a heuristic diff.
+    shas, observed, unbound = _observe(store, root, files or [])
     m = Memory(text=text.strip(), kind=kind if kind in KINDS else "fact",
                branch=branch, files=files or [], symbols=symbols or [],
                commit_range=commit, source=source, evidence=evidence,
-               blob_shas=gitmeta.blob_shas(root, files or []),
+               blob_shas=shas, observed=observed, unbound=unbound,
                author=gitmeta.git_user(root))
     return store.add_memory(m)
+
+
+def _observe(store: Store, root: Path, files: list[str]) -> tuple[dict, bool, bool]:
+    """Bind a memory's provenance to the bytes the agent actually OBSERVED. For each
+    file, prefer the read-ledger digest (recorded when the agent read/edited it) over
+    the capture-time hash; if they disagree the file moved between read and capture
+    (UNBOUND_CAPTURE). Returns ({path: observation digest}, observed, unbound):
+      observed — every anchored file was read-ledger-backed (not just capture-time)
+      unbound  — some file changed between when it was read and when we captured."""
+    shas, observed, unbound = {}, bool(files), False
+    for p in files:
+        cap = gitmeta.blob_sha(root, p)               # bytes at capture (session end)
+        read = store.read_ledger_get(p)               # bytes when the agent read it
+        if read:
+            shas[p] = read                            # bind to what was observed
+            if cap and read != cap:
+                unbound = True                        # moved between read and capture
+        elif cap:
+            shas[p] = cap                             # no read record → declared, not observed
+            observed = False
+        else:
+            observed = False                          # file absent now — can't anchor it
+    if not files:
+        observed = False
+    return shas, observed, unbound
 
 
 def remember_many(store: Store, root: Path, items: list[dict],

@@ -34,6 +34,11 @@ def _hooks_block() -> dict:
         # lost when a long session compacts mid-task; SessionEnd captures the rest.
         "PreCompact": [{"hooks": [{"type": "command", "command": _hook_cmd("precompact")}]}],
         "SessionEnd": [{"hooks": [{"type": "command", "command": _hook_cmd("capture")}]}],
+        # Read-time observation ledger: hash files as the agent reads/edits them, so
+        # capture binds memory to the bytes actually observed (not the file at session
+        # end) and can flag UNBOUND_CAPTURE.
+        "PostToolUse": [{"matcher": "Read|Edit|Write|MultiEdit",
+                         "hooks": [{"type": "command", "command": _hook_cmd("read")}]}],
     }
 
 
@@ -167,6 +172,7 @@ def _install_claude_code() -> int:
     print(f"[+] hooks written → {settings}")
     print("    SessionStart     → refreshes + seeds verified memory once (then pull on demand)")
     print("    UserPromptSubmit → pull mode: agent fetches memory itself (no per-prompt cost)")
+    print("    PostToolUse      → read-ledger: binds memory to the bytes actually read")
     print("    PreCompact       → captures before compaction (nothing lost mid-session)")
     print("    SessionEnd       → captures the session (via your agent, no key)")
     print("    (memory access: `omni-memory inject \"<q>\"`; switch with `omni-memory inject-mode`)")

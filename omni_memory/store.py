@@ -90,6 +90,13 @@ class Memory:
     # Who captured this — the git user at capture ("Name <email>"). Powers team
     # sharing: attribution + per-author shards that merge without conflict.
     author: str = ""
+    # Observation binding: `observed` = the blob_shas are the bytes the agent actually
+    # READ (from the read-ledger), not just the file at capture time — so the metric
+    # can separate "resolvable" from "bound to what was seen". `unbound` = the file
+    # moved between read and capture (UNBOUND_CAPTURE): the memory may be right about
+    # what it read, but re-read + re-capture is the remedy, not re-derive.
+    observed: bool = False
+    unbound: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d = self.__dict__.copy()
@@ -103,9 +110,12 @@ CREATE TABLE IF NOT EXISTS memory(
   created REAL, updated REAL, status TEXT, confidence REAL,
   source TEXT, supersedes_id TEXT, evidence TEXT DEFAULT 'stated',
   stale INTEGER DEFAULT 0, stale_since REAL, stale_files TEXT,
-  blob_shas TEXT, protected INTEGER DEFAULT 0, author TEXT);
+  blob_shas TEXT, protected INTEGER DEFAULT 0, author TEXT,
+  observed INTEGER DEFAULT 0, unbound INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, branch TEXT, summary TEXT);
+CREATE TABLE IF NOT EXISTS read_ledger(
+  path TEXT PRIMARY KEY, digest TEXT, ts REAL);
 CREATE TABLE IF NOT EXISTS conflicts(
   id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT, b TEXT, anchor TEXT,
   created REAL, resolved INTEGER DEFAULT 0);
@@ -193,7 +203,9 @@ class Store:
                           ("evidence", "TEXT DEFAULT 'stated'"),
                           ("blob_shas", "TEXT"),
                           ("protected", "INTEGER DEFAULT 0"),
-                          ("author", "TEXT")):
+                          ("author", "TEXT"),
+                          ("observed", "INTEGER DEFAULT 0"),
+                          ("unbound", "INTEGER DEFAULT 0")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE memory ADD COLUMN {col} {decl}")
         cn = {r["name"] for r in self.db.execute("PRAGMA table_info(code_nodes)")}
@@ -225,14 +237,17 @@ class Store:
         self.db.execute(
             "INSERT OR REPLACE INTO memory"
             "(id,branch,kind,text,files,symbols,commit_range,created,updated,"
-            "status,confidence,source,supersedes_id,evidence,blob_shas,protected,author) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "status,confidence,source,supersedes_id,evidence,blob_shas,protected,author,"
+            "observed,unbound) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (m.id, m.branch, m.kind, m.text, json.dumps(m.files),
              json.dumps(m.symbols), m.commit_range, m.created, m.updated,
              m.status, m.confidence, m.source, m.supersedes_id,
              m.evidence, json.dumps(getattr(m, "blob_shas", {}) or {}),
              1 if getattr(m, "protected", False) else 0,
-             getattr(m, "author", "") or ""))
+             getattr(m, "author", "") or "",
+             1 if getattr(m, "observed", False) else 0,
+             1 if getattr(m, "unbound", False) else 0))
         self.db.commit()
         return m
 
@@ -712,8 +727,23 @@ class Store:
         d["stale_files"] = json.loads(d.get("stale_files") or "[]")
         d["blob_shas"] = json.loads(d.get("blob_shas") or "{}")
         d["protected"] = bool(d.get("protected"))
+        d["observed"] = bool(d.get("observed"))
+        d["unbound"] = bool(d.get("unbound"))
         d["uses"] = d.get("uses") or 0
         return d
+
+    # -- read ledger (observation binding) ----------------------------------
+    def read_ledger_put(self, path: str, digest: str) -> None:
+        """Record the digest of `path`'s bytes at the moment the agent READ it, so
+        capture can bind memory to what was observed rather than the file at
+        session-end. Upsert — the most recent read wins."""
+        self.db.execute("INSERT OR REPLACE INTO read_ledger(path,digest,ts) VALUES(?,?,?)",
+                        (path, digest, time.time()))
+        self.db.commit()
+
+    def read_ledger_get(self, path: str) -> Optional[str]:
+        r = self.db.execute("SELECT digest FROM read_ledger WHERE path=?", (path,)).fetchone()
+        return r["digest"] if r else None
 
     # -- code graph ---------------------------------------------------------
     _CODE_COLS = ("id", "kind", "name", "file", "line_start", "line_end",
@@ -787,10 +817,10 @@ class Store:
           graph  → code graph only (code_nodes/code_edges)
         """
         groups = {
-            "memory": ["memory", "flows", "events", "conflicts"],
+            "memory": ["memory", "flows", "events", "conflicts", "read_ledger"],
             "graph": ["code_nodes", "code_edges"],
-            "all": ["memory", "flows", "events", "conflicts", "branches", "commits",
-                    "code_nodes", "code_edges"],
+            "all": ["memory", "flows", "events", "conflicts", "read_ledger",
+                    "branches", "commits", "code_nodes", "code_edges"],
         }
         tables = groups.get(scope, groups["all"])
         counts = {}

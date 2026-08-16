@@ -95,7 +95,8 @@ def recompute(store: Store, root: Path) -> dict:
 
 _EMPTY_RECONCILE = {"orphaned": 0, "drifted": 0, "fresh": 0, "uncheckable": 0,
                     "anchored": 0, "coverage": 0.0, "locator_coverage": 0.0,
-                    "refetch_coverage": 0.0, "source_enumeration_coverage": 0.0}
+                    "refetch_coverage": 0.0, "source_enumeration_coverage": 0.0,
+                    "observation_binding_coverage": 0.0, "unbound": 0}
 
 
 def _integrity_verdict(root: Path, shas: dict) -> str:
@@ -138,14 +139,17 @@ def reconcile(store: Store, root: Path) -> dict:
                  if n["kind"] in ("function", "method", "class")}
     now = time.time()
     anchored = fresh = drifted = orphaned = uncheckable = with_locator = with_files = 0
+    observed_n = unbound_n = 0
     for r in store.db.execute(
-            "SELECT id, files, symbols, blob_shas, stale FROM memory "
+            "SELECT id, files, symbols, blob_shas, stale, observed, unbound FROM memory "
             "WHERE status='active'"):
         files = json.loads(r["files"] or "[]")
         symbols = json.loads(r["symbols"] or "[]")
         if not files and not symbols:
             continue                              # unanchored — can't reconcile
         anchored += 1
+        observed_n += 1 if r["observed"] else 0   # bound to bytes actually READ (vs declared)
+        unbound_n += 1 if r["unbound"] else 0     # source moved between read and capture
         if files:
             with_files += 1                       # deletion-enumerable via the git tree
         shas = json.loads(r["blob_shas"] or "{}")
@@ -180,11 +184,18 @@ def reconcile(store: Store, root: Path) -> dict:
     # ls-files`), so any file-anchored memory's disappearance is catchable — this
     # is the "orphan slice" that's real regardless of retrieval.
     enum = (with_files / anchored) if anchored else 0.0
+    # observation_binding_coverage: a SEPARATE axis from refetchability — the fraction
+    # bound to the bytes the agent actually READ (read-ledger), not just the file at
+    # capture. "declared" is load-bearing: only the reader knows what it read, so a
+    # memory with no read record is declared, not observed. `unbound` counts the
+    # UNBOUND_CAPTURE slice: the source moved between observation and capture.
+    obs = (observed_n / anchored) if anchored else 0.0
     return {"orphaned": orphaned, "drifted": drifted, "fresh": fresh,
             "uncheckable": uncheckable, "anchored": anchored,
             "coverage": round(ref, 3), "locator_coverage": round(loc, 3),
             "refetch_coverage": round(ref, 3),
-            "source_enumeration_coverage": round(enum, 3)}
+            "source_enumeration_coverage": round(enum, 3),
+            "observation_binding_coverage": round(obs, 3), "unbound": unbound_n}
 
 
 def graduate_verified(store: Store, root: Path) -> int:

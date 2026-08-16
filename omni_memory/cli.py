@@ -689,6 +689,23 @@ def _run_hook(args):
         if block and _should_inject(s, block):
             print(block)                        # stdout is added to the prompt context
         return 0
+    if args.event == "read":                   # PostToolUse(Read|Edit|Write) → read ledger
+        # Record the digest of what the agent actually READ, so capture can bind a
+        # memory to the observed bytes (not the file at session-end) and detect a
+        # source that moved between observation and capture (UNBOUND_CAPTURE).
+        import os
+        ti = data.get("tool_input") or {}
+        fp = ti.get("file_path") or ti.get("path") or ""
+        if fp:
+            try:
+                rel = os.path.relpath(fp, root)
+                if not rel.startswith(".."):        # only files inside the repo
+                    dig = gitmeta.blob_sha(root, rel)
+                    if dig:
+                        s.read_ledger_put(rel, dig)
+            except Exception:  # noqa: BLE001
+                pass
+        return 0
     if args.event in ("capture", "precompact"):  # SessionEnd OR PreCompact → extract + store
         # PreCompact fires BEFORE the context is summarized away, so unfiled memory
         # isn't lost if the session compacts (or dies) before it ends. Capture reads
@@ -877,6 +894,13 @@ def cmd_doctor(args):
             clean = not (rec["orphaned"] or rec["uncheckable"])
             line(True if clean else None, "source integrity", detail,
                  "orphans flagged stale (`omni-memory gc`); re-capture legacy memory to add content keys")
+            # observation binding is a SEPARATE axis from refetchability
+            obs = int(rec.get("observation_binding_coverage", 0) * 100)
+            unb = rec.get("unbound", 0)
+            line(True if not unb else None, "observation binding",
+                 f"{obs}% observed (bound to bytes actually read), rest declared (capture-time)"
+                 + (f"; ⚠ {unb} UNBOUND_CAPTURE (source moved before capture — re-read & re-capture)" if unb else ""),
+                 "install the read hook (`omni-memory bind`) so capture binds to what was read")
     except Exception:  # noqa: BLE001
         pass
     agents = (root / "AGENTS.md").exists()
@@ -961,7 +985,7 @@ def main(argv=None):
     fl.add_argument("--scope", choices=["all", "memory", "graph"], default="all")
     fl.add_argument("--yes", "-y", action="store_true", help="skip confirmation")
     hk = sub.add_parser("hook")
-    hk.add_argument("event", choices=["start", "inject", "capture", "precompact"])
+    hk.add_argument("event", choices=["start", "inject", "capture", "precompact", "read"])
     ky = sub.add_parser("key"); ky.add_argument("provider", choices=["gemini", "anthropic", "openai"])
     ui = sub.add_parser("ui"); ui.add_argument("--port", type=int, default=7777)
     ins = sub.add_parser("install"); ins.add_argument("--platform", default="claude-code")
