@@ -745,6 +745,21 @@ class Store:
         r = self.db.execute("SELECT digest FROM read_ledger WHERE path=?", (path,)).fetchone()
         return r["digest"] if r else None
 
+    def clear_read_ledger(self) -> int:
+        """Wipe the read ledger — done at SessionStart so a file read in a PRIOR
+        session can't be mistaken for an observation made THIS session (which would
+        falsely mark a memory `observed`/`unbound`)."""
+        cur = self.db.execute("DELETE FROM read_ledger")
+        self.db.commit()
+        return cur.rowcount
+
+    def read_ledger_del(self, path: str) -> None:
+        self.db.execute("DELETE FROM read_ledger WHERE path=?", (path,))
+        self.db.commit()
+
+    def read_ledger_count(self) -> int:
+        return self.db.execute("SELECT COUNT(*) c FROM read_ledger").fetchone()["c"]
+
     # -- code graph ---------------------------------------------------------
     _CODE_COLS = ("id", "kind", "name", "file", "line_start", "line_end",
                   "parent", "signature", "doc", "raises", "calls")

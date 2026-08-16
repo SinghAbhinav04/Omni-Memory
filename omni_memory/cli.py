@@ -653,6 +653,7 @@ def _run_hook(args):
         return 0
     mode = s.get_meta("inject_mode", "session")   # session (default) | auto | manual
     if args.event == "start":                  # SessionStart → refresh + ensure AGENTS.md
+        s.clear_read_ledger()                  # fresh session: prior-session reads must not bind now
         _bootstrap_shared(s, root)             # fresh clone → load committed memory (legacy single file)
         try:                                    # team sync: pull teammates' shards every session
             from . import team
@@ -699,7 +700,9 @@ def _run_hook(args):
         if fp:
             try:
                 rel = os.path.relpath(fp, root)
-                if not rel.startswith(".."):        # only files inside the repo
+                p = root / rel
+                if (not rel.startswith("..")           # only files inside the repo
+                        and p.is_file() and p.stat().st_size <= 2_000_000):  # skip huge files
                     dig = gitmeta.blob_sha(root, rel)
                     if dig:
                         s.read_ledger_put(rel, dig)
@@ -848,6 +851,45 @@ def _plugin_hooks_present() -> bool:
     return False
 
 
+def _doctor_read_collector(s, root, line):
+    """Liveness gate for the observation collector: a hook-based ledger can die
+    SILENTLY (bad interpreter, import error → exit 0) while every existing record
+    still reads observed. Exit codes can't see that, so we run the read hook exactly
+    the way Claude Code invokes it — synthetic stdin through the shell — against a
+    real probe file, and confirm it actually WROTE the ledger. OK / not-recording."""
+    import subprocess
+    from . import install as _inst
+    probe = ""
+    try:
+        probe = (gitmeta._git(root, "ls-files").splitlines() or [""])[0]
+    except Exception:  # noqa: BLE001
+        pass
+    if not probe or not (root / probe).is_file():
+        return                                     # nothing to probe with
+    try:
+        s.read_ledger_del(probe)                   # clear any prior entry so a pass is real
+        payload = json.dumps({"tool_name": "Read",
+                              "tool_input": {"file_path": str((root / probe).resolve())}})
+        r = subprocess.run(_inst._hook_cmd("read"), shell=True, input=payload, text=True,
+                           cwd=str(root), capture_output=True, timeout=20)
+        alive = s.read_ledger_get(probe) is not None
+        out = (r.stdout or "") + (r.stderr or "")
+        silent = bool(out.strip()) and not alive   # confessed an error but exited 0-ish
+        s.read_ledger_del(probe)                    # clean the probe entry either way
+        if alive:
+            line(True, "read collector", "hook executes and records the read ledger")
+        else:
+            why = "SILENT-FAIL (ran, wrote nothing — check `python3` runs your hooks / import errors)" \
+                  if silent else "not recording — new memory can't be `observed`, only `declared`"
+            line(None, "read collector", why,
+                 "wire it: `omni-memory bind`; verify `python3` resolves to a real interpreter")
+    except Exception:  # noqa: BLE001
+        try:
+            s.read_ledger_del(probe)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def cmd_doctor(args):
     """`doctor` — diagnose the setup: git, store, layer state, tree-sitter, code
     graph, memory counts, AGENTS.md, hooks, and AI provider. Each line says how to
@@ -887,10 +929,12 @@ def cmd_doctor(args):
         if rec["anchored"]:
             ref, loc = int(rec["refetch_coverage"] * 100), int(rec["locator_coverage"] * 100)
             enum = int(rec["source_enumeration_coverage"] * 100)
-            detail = (f"{ref}% of {rec['anchored']} anchored memories verified re-fetchable "
+            nb = rec.get("not_bindable", 0)          # reported BESIDE, never inside the %
+            detail = (f"{ref}% of {rec['anchored']} bindable memories verified re-fetchable "
                       f"({rec['fresh']} fresh, {rec['drifted']} drifted, "
                       f"{rec['orphaned']} orphaned, {rec['uncheckable']} unverifiable); "
-                      f"{loc}% carry a content key; {enum}% deletion-detectable")
+                      f"{loc}% carry a content key; {enum}% deletion-detectable"
+                      + (f"; {nb} not-bindable (no addressable source — beside the denominator)" if nb else ""))
             clean = not (rec["orphaned"] or rec["uncheckable"])
             line(True if clean else None, "source integrity", detail,
                  "orphans flagged stale (`omni-memory gc`); re-capture legacy memory to add content keys")
@@ -903,6 +947,7 @@ def cmd_doctor(args):
                  "install the read hook (`omni-memory bind`) so capture binds to what was read")
     except Exception:  # noqa: BLE001
         pass
+    _doctor_read_collector(s, root, line)          # is the read hook actually ALIVE?
     agents = (root / "AGENTS.md").exists()
     line(agents, "AGENTS.md", "present (cross-IDE context)" if agents else "missing",
          "run `omni-memory bind`")
