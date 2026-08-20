@@ -77,7 +77,7 @@ def sync(store: Store, root: Path) -> int:
 
 
 def status(store: Store, root: Path) -> dict:
-    """Per-author counts for `omni-memory team`."""
+    """Per-author counts for `omni-memory share --status`."""
     rows = store.db.execute(
         "SELECT COALESCE(NULLIF(author,''),'(unknown)') a, COUNT(*) c "
         "FROM memory WHERE status='active' GROUP BY a ORDER BY c DESC").fetchall()

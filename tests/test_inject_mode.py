@@ -48,9 +48,26 @@ def test_manual_mode_never_seeds(store, repo, monkeypatch, capsys):
     assert "VERIFIED PROJECT MEMORY" not in capsys.readouterr().out  # pull-only, no seed
 
 
-def test_inject_mode_command_sets_meta(store, repo, monkeypatch):
+def test_config_sets_inject_mode(store, repo, monkeypatch):
+    """0.10.0 folded the bespoke `inject-mode` subcommand into `config`, so every
+    tunable is listed in one place instead of one command per knob."""
     monkeypatch.chdir(repo)
-    cli.cmd_inject_mode(types.SimpleNamespace(mode="auto"))
+    cli.cmd_config(types.SimpleNamespace(key="inject_mode", value="auto"))
     assert store.get_meta("inject_mode") == "auto"
-    cli.cmd_inject_mode(types.SimpleNamespace(mode="manual"))
+    cli.cmd_config(types.SimpleNamespace(key="inject_mode", value="manual"))
+    assert store.get_meta("inject_mode") == "manual"
+
+
+def test_config_rejects_an_invalid_mode(store, repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    cli.cmd_config(types.SimpleNamespace(key="inject_mode", value="auto"))
+    assert cli.cmd_config(types.SimpleNamespace(key="inject_mode", value="loud")) == 1
+    assert store.get_meta("inject_mode") == "auto"        # unchanged by the bad value
+    assert "one of" in capsys.readouterr().out
+
+
+def test_config_reads_a_setting_without_changing_it(store, repo, monkeypatch):
+    monkeypatch.chdir(repo)
+    cli.cmd_config(types.SimpleNamespace(key="inject_mode", value="manual"))
+    cli.cmd_config(types.SimpleNamespace(key="inject_mode", value=None))
     assert store.get_meta("inject_mode") == "manual"

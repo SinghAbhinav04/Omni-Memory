@@ -21,6 +21,7 @@ import json
 import re
 import time
 from pathlib import Path
+from typing import Optional
 
 from . import gitmeta
 from .store import Store
@@ -100,15 +101,20 @@ _EMPTY_RECONCILE = {"orphaned": 0, "drifted": 0, "fresh": 0, "uncheckable": 0,
                     "not_bindable": 0}
 
 
-def _integrity_verdict(root: Path, shas: dict) -> str:
+def _integrity_verdict(root: Path, shas: dict, current: Optional[dict] = None) -> str:
     """Exact source-integrity of one memory's anchored files, by re-resolving each
     recorded blob sha at HEAD. Worst anchor wins:
         ORPHANED (an object is gone) > DRIFTED (an sha changed) > FRESH.
     This is content identity, not a diff — no false positives from unrelated edits,
-    and it catches deletion, which a diff against the index never can."""
+    and it catches deletion, which a diff against the index never can.
+
+    `current` is a prefetched {path: sha} map. Pass it when checking many memories:
+    without it this spawns one `git hash-object` per path per memory, which is the same
+    ~13x cost `gitmeta.blob_shas` was introduced to remove on the injection path.
+    """
     worst = "FRESH"
     for path, sha in shas.items():
-        cur = gitmeta.blob_sha(root, path)
+        cur = current.get(path) if current is not None else gitmeta.blob_sha(root, path)
         if not cur:
             return "ORPHANED"                     # object missing at HEAD → deleted
         if cur != sha:
@@ -139,11 +145,17 @@ def reconcile(store: Store, root: Path) -> dict:
     sym_names = {n["name"] for n in store.code_graph()[0]
                  if n["kind"] in ("function", "method", "class")}
     now = time.time()
+    rows = list(store.db.execute(
+        "SELECT id, files, symbols, blob_shas, stale, observed, unbound FROM memory "
+        "WHERE status='active'"))
+    # ONE `git hash-object` for every anchored path in the store, not one per
+    # memory-file pair. This is the whole cost of the reconcile pass, and it is what
+    # `doctor` waits on.
+    all_paths = {p for r in rows for p in json.loads(r["blob_shas"] or "{}")}
+    current = gitmeta.blob_shas(root, sorted(all_paths))
     anchored = fresh = drifted = orphaned = uncheckable = with_locator = with_files = 0
     observed_n = unbound_n = not_bindable = 0
-    for r in store.db.execute(
-            "SELECT id, files, symbols, blob_shas, stale, observed, unbound FROM memory "
-            "WHERE status='active'"):
+    for r in rows:
         files = json.loads(r["files"] or "[]")
         symbols = json.loads(r["symbols"] or "[]")
         if not files and not symbols:
@@ -160,7 +172,7 @@ def reconcile(store: Store, root: Path) -> dict:
         shas = json.loads(r["blob_shas"] or "{}")
         if shas:                                  # exact, content-identity path
             with_locator += 1
-            verdict = _integrity_verdict(root, shas)
+            verdict = _integrity_verdict(root, shas, current)
             if verdict == "ORPHANED":
                 orphaned += 1
                 store.set_stale(r["id"], True, None if r["stale"] else now, ["<deleted>"])
@@ -209,17 +221,29 @@ def graduate_verified(store: Store, root: Path) -> int:
     single legitimate path to the top tier for machine-captured memory. A memory
     graduates when its source anchor is re-fetchable AND unchanged (every recorded
     blob sha still matches HEAD) AND the agent has cited it (uses>0). Content can
-    never self-declare `verified`; it must be earned by outcome + reality."""
+    never self-declare `verified`; it must be earned by outcome + reality.
+
+    This applies to a teammate's shared memory too, and deliberately so. A blob sha is a
+    content hash, identical across clones, so an imported anchor genuinely re-resolves
+    against YOUR checkout — it is not being trusted on faith, it is being re-verified
+    locally. And `uses > 0` means you cited it and it held up. Excluding shared memory
+    here would cap it at `stated` forever while `team.py` documents the opposite; the
+    origin is already surfaced to the agent as ↗external at injection time, which is
+    where a provenance caveat belongs — not as a permanent ceiling on evidence that
+    reality has since confirmed."""
     if not gitmeta.is_repo(root):
         return 0
     n = 0
-    for r in store.db.execute(
-            "SELECT id, blob_shas, source FROM memory WHERE status='active' "
-            "AND evidence='stated' AND COALESCE(uses,0) > 0"):
+    rows = list(store.db.execute(
+        "SELECT id, blob_shas, source FROM memory WHERE status='active' "
+        "AND evidence='stated' AND COALESCE(uses,0) > 0"))
+    current = gitmeta.blob_shas(          # one batched hash for the whole promotion pass
+        root, sorted({p for r in rows for p in json.loads(r["blob_shas"] or "{}")}))
+    for r in rows:
         shas = json.loads(r["blob_shas"] or "{}")
-        if not shas or r["source"] in ("imported", "shared"):
-            continue                              # no content key / untrusted origin
-        if _integrity_verdict(root, shas) == "FRESH":
+        if not shas:
+            continue                              # no content key to re-resolve
+        if _integrity_verdict(root, shas, current) == "FRESH":
             store.db.execute("UPDATE memory SET evidence='verified' WHERE id=?", (r["id"],))
             n += 1
     if n:

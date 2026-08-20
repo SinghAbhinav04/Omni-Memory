@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import branch as branchmod, gitmeta
-from .store import Store
+from .store import Store, _similar
 
 _PATH_RE = re.compile(r"[\w./-]+\.[A-Za-z0-9]{1,5}")
 
@@ -28,8 +28,8 @@ def _files_in_play(root: Path, query: str, files: Optional[list[str]]) -> list[s
 # Terse by design: this block is the session-start seed and the on-demand pull
 # (`omni-memory inject`), so it stays high-signal without a per-prompt token cost.
 ENFORCE_RULES = (
-    "Rules: treat these as verified project truth; cite the [id]s you use; if it's "
-    "not here or in the code say \"not in memory\" (don't invent it); re-verify ⚠STALE items."
+    "Rules: trust these; cite [id]s used; not here or in the code → say "
+    "\"not in memory\"; re-verify ⚠STALE."
 )
 
 
@@ -55,14 +55,20 @@ def _clip(text: str, cap: int) -> str:
 
 
 def build_block(store: Store, root: Path, query: str = "",
-                files: Optional[list[str]] = None, limit: int = _MAX_ITEMS) -> str:
+                files: Optional[list[str]] = None, limit: int = _MAX_ITEMS,
+                event: str = "") -> str:
     """Build the `VERIFIED PROJECT MEMORY` block injected into a prompt.
 
     Scopes to the current branch+base, ranks memories by relevance to the query
     and the files in play, then emits a *budget-capped* set with enforcement
     rules. Returns "" when there's nothing worth injecting. Kept deliberately
-    lean because it rides on every message (see the _MAX_* / _CHAR_BUDGET caps)."""
-    # per-project overrides (set via `omni-memory usage --max-items/--budget`)
+    lean because it rides on every message (see the _MAX_* / _CHAR_BUDGET caps).
+
+    `event` names the pull for the savings ledger ("session" | "prompt" | "pull") and
+    is recorded only when passed. Callers that build a block merely to MEASURE it —
+    `gain`'s own footprint report — pass nothing, so the metric can never count itself.
+    """
+    # per-project overrides (set via `omni-memory gain --max-items/--budget`)
     limit = int(store.get_meta("inject_max_items", limit))
     char_budget = int(store.get_meta("inject_char_budget", _CHAR_BUDGET))
     widen = int(store.get_meta("inject_widen_items", _WIDEN_ITEMS))
@@ -117,7 +123,14 @@ def build_block(store: Store, root: Path, query: str = "",
     ]
     conflicted = store.conflict_member_ids()      # ids in an unresolved merge conflict
     used, budget, has_external, has_inferred, has_conflict = 0, char_budget, False, False, False
+    emitted: list[dict] = []                      # what actually made it into the block
+    emitted_texts: list[str] = []
     for m in mems:
+        # Near-duplicates cost the budget twice for one fact. The store already knows
+        # how to tell them apart (`_supersede_duplicates` uses the same comparison), so
+        # reuse it rather than inventing a second notion of "the same memory".
+        if any(_similar(m["text"], prev) for prev in emitted_texts):
+            continue
         tag = f"[{m['id']}]"
         where = (" · " + ", ".join(m["files"][:2])) if m["files"] else ""
         # provenance: global / externally-sourced (imported or a committed shared
@@ -148,19 +161,41 @@ def build_block(store: Store, root: Path, query: str = "",
         if used and budget - len(line) < 0:   # keep at least one; then honor budget
             break
         lines.append(line)
+        emitted.append(m)
+        emitted_texts.append(m["text"])
         budget -= len(line)
         used += 1
-    if has_conflict:
-        lines.insert(3, "Note: ⚠CONFLICT items contradict another memory on the same "
-                        "symbol after a branch merge — do NOT trust one blindly; re-verify "
-                        "against the code and resolve with `omni-memory resolve <id>`.")
+    # One legend line naming only the markers that actually appear, instead of up to
+    # three ~90-token Note: paragraphs. The markers are already in the block; the agent
+    # needs their meaning, not a paragraph arguing for it.
+    legend = []
     if has_inferred:
-        lines.insert(3, "Note: ✓ = verified by outcome (trust it); ~ = inferred/"
-                        "unconfirmed (weigh lightly, re-verify before relying).")
+        legend.append("✓=verified by outcome, trust it · ~=inferred, re-verify first")
     if has_external:
-        lines.insert(3, "Note: ↗external / 🌐global items came from outside this "
-                        "project's own capture (imported/shared/global) — verify "
-                        "before trusting them as this project's truth.")
+        legend.append("↗external/🌐global came from outside this project's capture — "
+                      "verify before trusting")
+    if has_conflict:
+        legend.append("⚠CONFLICT contradicts another memory post-merge — re-verify, "
+                      "then `omni-memory resolve <id>`")
+    if legend:
+        lines.insert(3, "Key: " + " · ".join(legend))
     lines[1] = lines[1].replace("scope:", f"scope: {used} item(s) ·", 1)
     lines.append("=== END MEMORY — cite [id]s you used ===")
-    return "\n".join(lines)
+    block = "\n".join(lines)
+    # Both bookkeeping calls below take `emitted` — what actually reached the block.
+    # NOT `mems[:used]`: that stopped matching once near-duplicates began being skipped
+    # mid-loop, which would pin and bill memories the agent was never shown.
+    #
+    # VERIFY -> USE: this pull is a verification, so pin what each memory is being
+    # trusted on as it stands right now. Citing an [id] later re-checks these pins, which
+    # is what lets a memory that goes stale MID-TASK be caught — `⚠STALE` above is
+    # refresh-time and cannot see that window.
+    try:
+        from . import witness
+        witness.pin(store, root, emitted)
+    except Exception:  # noqa: BLE001 — injection must never fail on a bookkeeping error
+        pass
+    if event:
+        from . import savings
+        savings.record(store, root, block, emitted, event, branch=cur)
+    return block

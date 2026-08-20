@@ -66,7 +66,9 @@ def test_build_command_builds_code_graph(repo, monkeypatch):
     import types
     import omni_memory.cli as cli
     monkeypatch.chdir(repo)
-    cli.cmd_build(types.SimpleNamespace(no_ai=True, no_docs=True))
+    # `no_docs_gen` arrived in 0.10.0 when the separate `artifact` command was folded
+    # into `build`; the AI-doc pass is skipped here along with the AI pass itself.
+    cli.cmd_build(types.SimpleNamespace(no_ai=True, no_docs=True, no_docs_gen=True))
     from omni_memory.store import Store
     assert len(Store(repo).code_graph()[0]) > 0    # first build populates it
 

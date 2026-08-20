@@ -149,22 +149,73 @@ def capture_from_json(store: Store, root: Path, raw: str,
                 items = llm.extract_memories(EXTRACTION_PROMPT, raw[:30_000])
                 source = "ai-session"
             except Exception:  # noqa: BLE001
-                items = _heuristic_extract(raw)
+                items = _heuristic_extract(raw, root)
                 source = "heuristic"                # noisy scanner → strict filter
         else:                                       # free: no `claude -p` on autopilot
-            items = _heuristic_extract(raw)
+            items = _heuristic_extract(raw, root)
             source = "heuristic"                    # require a concrete anchor
     return remember_many(store, root, items, source=source)
 
 
 # -- fallback heuristic extractor (no LLM) ----------------------------------
+# Ordered most-specific-first, and every pattern demands STRUCTURE rather than a
+# mention. The old `\b(endpoint|route|...)\b` fired on any prose containing the word
+# "endpoint", so half a transcript was filed as endpoint memory — and because
+# `systemmap._ROLE_BY_KIND` resolves `endpoint` to `gateway` before anything else, the
+# system map rendered almost every module as a gateway. A word is not a fact about the
+# system; a method+path, an arrow chain, or a DDL verb is.
 _PATTERNS = [
-    (r"\b(decided|we'll use|chose|going with|switch(?:ed)? to)\b", "decision"),
-    (r"\b(TODO|FIXME|need to|should)\b", "todo"),
-    (r"\b(careful|gotcha|note that|watch out|don't|beware)\b", "gotcha"),
-    (r"\b(endpoint|route|/api/|GET |POST |PUT |DELETE )\b", "endpoint"),
-    (r"\b(table|column|schema|migration|kafka|queue|publish(?:es)?)\b", "flow"),
+    (r"(?:\b(?:GET|POST|PUT|PATCH|DELETE)\s+/\S+|/api/[\w{}/-]+)", "endpoint"),
+    (r"\S\s*(?:->|→|=>)\s*\S", "flow"),
+    (r"\b(?:CREATE TABLE|ALTER TABLE|migration|foreign key|primary key|"
+     r"\w+\.\w+ column|column \w+)\b", "db"),
+    (r"\b(?:publishes|subscribes|consumes|emits)\b.{0,40}\b(?:topic|queue|event)\b"
+     r"|\b(?:kafka|rabbitmq|sqs)\b", "event"),
+    (r"\b(?:we decided|decided to|we'll use|chose|going with|switch(?:ed)? to)\b",
+     "decision"),
+    (r"\b(?:gotcha|watch out|beware|careful:|note that)\b", "gotcha"),
+    (r"\b(?:TODO|FIXME)\b", "todo"),
+    (r"\bis (?:a|an|the)\b.{6,}", "concept"),
 ]
+
+# A path candidate: at least one real filename-ish segment ending in a plausible source
+# extension. Deliberately NOT `[\w/]+\.\w+`, which matched "0.9", "3.11", "e.g" and
+# "//pypi.org" — version numbers and hostnames wearing a dot. Every candidate is then
+# checked against the working tree, because the only thing that makes a path an anchor
+# is that it resolves.
+_FILE_RE = re.compile(r"\b[\w.-]+(?:/[\w.-]+)*\.[A-Za-z][A-Za-z0-9]{0,4}\b")
+
+# Transcripts are flattened to "role: text" by `cli._read_transcript`. The prefix is
+# framing, not content, and keeping it turned chat turns into project facts.
+_ROLE_PREFIX = re.compile(r"^\s*(?:assistant|user|system|human)\s*:\s*", re.I)
+
+
+def _real_files(root: Path, line: str) -> list[str]:
+    """Paths named in `line` that actually resolve to a file INSIDE the repo.
+
+    An anchor that does not resolve is not an anchor. Enforcing that here is what stops
+    a fake path from earning a blob sha it can never honour, and from reaching the
+    system map as a building named after a version number.
+
+    Anything outside the repo is dropped too: `..` segments survive the regex, and an
+    anchor pointing out of the tree is one git cannot hash and the map cannot cite.
+    """
+    out = []
+    root = Path(root).resolve()
+    for cand in _FILE_RE.findall(line):
+        # Strip a leading `./` only. `lstrip("./")` strips those CHARACTERS, which
+        # quietly turns `../outside.py` into `outside.py` — re-pointing the anchor at a
+        # different file instead of rejecting it.
+        rel = cand[2:] if cand.startswith("./") else cand
+        if not rel or rel in out:
+            continue
+        try:
+            p = (root / rel).resolve()
+            if p.is_file() and p.relative_to(root):
+                out.append(rel)
+        except (ValueError, OSError):
+            continue                    # outside the repo, or unresolvable
+    return out
 
 
 _SKIP_DIRS = {"node_modules", ".git", ".omni-memory", "dist", "build",
@@ -183,23 +234,34 @@ def ingest_docs(store: Store, root: Path, max_files: int = 300) -> tuple[int, in
         except Exception:  # noqa: BLE001
             continue
         rel = str(f.relative_to(root))
-        items = _heuristic_extract(text)
+        items = _heuristic_extract(text, root)
+        # Filter BEFORE stamping the doc's own path on. The strict noise path waives
+        # its concrete-anchor requirement for anything that already names a file, so
+        # stamping first made every scanned line self-certifying: `PLAN.md` is where we
+        # happened to be reading, not evidence that the line is a durable fact.
+        from . import cleanup
+        items, _ = cleanup.filter_items(items, source="doc")
         for it in items:
-            it.setdefault("files", []).append(rel)
+            if rel not in it.setdefault("files", []):
+                it["files"].append(rel)
         a, _dropped = remember_many(store, root, items, source="doc")
         added += a
     return added, len(docs)
 
 
-def _heuristic_extract(text: str) -> list[dict]:
+def _heuristic_extract(text: str, root: Optional[Path] = None) -> list[dict]:
+    """Scan raw text for candidate memories. Noisy by design — `cleanup.filter_items`
+    is the gate — but it must not manufacture evidence: the role prefix is stripped so
+    a chat turn isn't stored as a fact, and file anchors are resolved against `root`
+    so a version number can't masquerade as a source."""
     out = []
     for line in text.splitlines():
-        line = line.strip("-* \t")
+        line = _ROLE_PREFIX.sub("", line.strip("-* \t")).strip()
         if len(line) < 12 or len(line) > 240:
             continue
         for pat, kind in _PATTERNS:
             if re.search(pat, line, re.I):
                 out.append({"kind": kind, "text": line,
-                            "files": re.findall(r"[\w/]+\.\w+", line)})
+                            "files": _real_files(root, line) if root else []})
                 break
     return out[:40]

@@ -116,6 +116,19 @@ CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, branch TEXT, summary TEXT);
 CREATE TABLE IF NOT EXISTS read_ledger(
   path TEXT PRIMARY KEY, digest TEXT, ts REAL);
+-- VERIFY -> USE: the source digests a memory was verified against at the moment it was
+-- PULLED, so the check can be carried forward to the moment the agent acts on it.
+-- `kind` records HOW the pin was bound (observed = read-ledger backed, pin = hashed at
+-- pin time), because that changes what the later answer is worth.
+CREATE TABLE IF NOT EXISTS witness(
+  mem_id TEXT, path TEXT, digest TEXT, kind TEXT, pinned_at REAL,
+  PRIMARY KEY(mem_id, path));
+-- What each pull cost vs. what re-reading the cited sources would have cost. See
+-- savings.py for the baseline model; `files` is how many sources actually resolved,
+-- so a saving can always be traced back to something checkable.
+CREATE TABLE IF NOT EXISTS savings(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, event TEXT, branch TEXT,
+  mem_ids TEXT, served INTEGER, baseline INTEGER, files INTEGER);
 CREATE TABLE IF NOT EXISTS conflicts(
   id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT, b TEXT, anchor TEXT,
   created REAL, resolved INTEGER DEFAULT 0);
@@ -189,6 +202,7 @@ class Store:
         self.db.execute("PRAGMA busy_timeout=10000")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
+        self._noise_swept = 0        # set by the retro-sweep so `status` can report it
         self._migrate()
         self.db.commit()
 
@@ -212,6 +226,47 @@ class Store:
         for col in ("signature", "doc", "raises", "calls"):
             if col not in cn:
                 self.db.execute(f"ALTER TABLE code_nodes ADD COLUMN {col} TEXT")
+        self._sweep_legacy_noise()
+
+    #: bump when the noise filter tightens enough to be worth re-running over
+    #: memory captured by an older, looser version.
+    NOISE_SWEEP_VERSION = 3
+
+    def _sweep_legacy_noise(self) -> None:
+        """One-time: quarantine memory the CURRENT noise filter would have rejected.
+
+        Versions through 0.9.x stored raw transcript lines as facts and gave them file
+        anchors invented from version numbers ("0.9", "3.11"), which then satisfied the
+        strict filter's "already names a file" waiver. That junk is injected into every
+        session, so leaving it in place would mean the fixed filter only helps new
+        capture while the old noise keeps costing tokens forever.
+
+        Quarantine, never delete: it is reversible with `gc --restore <id>`, and memory
+        the agent has actually cited (`uses > 0`) or that a human protected is left
+        alone regardless — a filter is evidence about text, not about what proved useful.
+        """
+        try:
+            if int(self.get_meta("noise_sweep", 0) or 0) >= self.NOISE_SWEEP_VERSION:
+                return
+            from . import cleanup
+            hits = []
+            for r in self.db.execute(
+                    "SELECT id, text, files, symbols, source FROM memory "
+                    "WHERE status='active' AND COALESCE(uses,0)=0 "
+                    "AND COALESCE(protected,0)=0"):
+                files = json.loads(r["files"] or "[]")
+                symbols = json.loads(r["symbols"] or "[]")
+                if cleanup.is_noise(r["text"], files, symbols,
+                                    r["source"] or "session"):
+                    hits.append(r["id"])
+            for mem_id in hits:
+                self.quarantine(mem_id, "extraction noise (filter v%d retro-sweep)"
+                                % self.NOISE_SWEEP_VERSION)
+            self.set_meta("noise_sweep", self.NOISE_SWEEP_VERSION)
+            if hits:
+                self._noise_swept = len(hits)
+        except Exception:  # noqa: BLE001 — a migration must never block opening a store
+            pass
 
     # -- meta / toggles -----------------------------------------------------
     def get_meta(self, key: str, default: Any = None) -> Any:
@@ -760,6 +815,44 @@ class Store:
     def read_ledger_count(self) -> int:
         return self.db.execute("SELECT COUNT(*) c FROM read_ledger").fetchone()["c"]
 
+    # -- witness (VERIFY -> USE) --------------------------------------------
+    def witness_pin(self, mem_id: str, path: str, digest: str, kind: str) -> None:
+        """Record the state a memory was verified against at the moment it was pulled.
+        Re-pinning refreshes it: every pull is a fresh verification."""
+        self.db.execute(
+            "INSERT OR REPLACE INTO witness(mem_id,path,digest,kind,pinned_at) "
+            "VALUES(?,?,?,?,?)", (mem_id, path, digest, kind, time.time()))
+
+    def witness_for(self, mem_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT path,digest,kind,pinned_at FROM witness WHERE mem_id=?", (mem_id,))]
+
+    def clear_witness(self) -> int:
+        """Wipe pins at SessionStart. A pin from a prior session cannot answer "did the
+        world move during THIS task" — carrying it over would date the window wrongly."""
+        cur = self.db.execute("DELETE FROM witness")
+        self.db.commit()
+        return cur.rowcount
+
+    def witness_count(self) -> int:
+        return self.db.execute("SELECT COUNT(*) c FROM witness").fetchone()["c"]
+
+    # -- savings ledger ------------------------------------------------------
+    def add_saving(self, event: str, branch: str, mem_ids: list, served: int,
+                   baseline: int, files: int) -> None:
+        """Log one pull's measured cost and its re-read counterfactual."""
+        self.db.execute(
+            "INSERT INTO savings(ts,event,branch,mem_ids,served,baseline,files) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (time.time(), event, branch, json.dumps(mem_ids or []),
+             int(served), int(baseline), int(files)))
+        self.db.commit()
+
+    def clear_savings(self) -> int:
+        cur = self.db.execute("DELETE FROM savings")
+        self.db.commit()
+        return cur.rowcount
+
     # -- code graph ---------------------------------------------------------
     _CODE_COLS = ("id", "kind", "name", "file", "line_start", "line_end",
                   "parent", "signature", "doc", "raises", "calls")
@@ -831,10 +924,15 @@ class Store:
           memory → memory + flows only
           graph  → code graph only (code_nodes/code_edges)
         """
+        # `witness` and `savings` follow the memory they describe: pins that outlive
+        # their memory can never be resolved, and a savings row whose memories are gone
+        # would keep claiming credit for knowledge the store no longer has.
         groups = {
-            "memory": ["memory", "flows", "events", "conflicts", "read_ledger"],
+            "memory": ["memory", "flows", "events", "conflicts", "read_ledger",
+                       "witness", "savings"],
             "graph": ["code_nodes", "code_edges"],
             "all": ["memory", "flows", "events", "conflicts", "read_ledger",
+                    "witness", "savings",
                     "branches", "commits", "code_nodes", "code_edges"],
         }
         tables = groups.get(scope, groups["all"])

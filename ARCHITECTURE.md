@@ -46,8 +46,12 @@ will navigate itself.
      (prompt block)   (MEMORY.md)      (AGENTS.md)     (build snapshot)
                                              │
      ┌──────────────── memory lifecycle ─────┴───────────────────┐
-     session_memory   cleanup      staleness     eviction     rank
-     (capture)        (noise)      (anchor)      (gc)         (relevance)
+     session_memory   cleanup      staleness     eviction     rank     savings
+     (capture)        (noise)      (anchor)      (gc)         (rank)   (tokens saved)
+                                             │
+     ┌──────────────── provenance ───────────┴───────────────────┐
+     witness          collector           identifier      systemmap
+     (verify→use)     (liveness)          (id contract)   (architecture map)
                                              │
      ┌──────────────── code graph ───────────┴──── git provenance ┐
      graph/extract → graph/build            gitmeta → branch
@@ -98,6 +102,31 @@ will navigate itself.
 - **`rank.py`** — relevance ranking: BM25F over memory fields + graph-proximity
   boost + citation feedback. Zero-dep, pure math.
 
+### Provenance — the difference between a memory that resolves and one that's true
+A locator can resolve perfectly *to the wrong observation*. These four modules keep the
+separate questions separate, because collapsing them reads as confidence:
+
+- **`witness.py`** — the VERIFY → USE window. Everything else verifies at *pull*;
+  nothing carried that forward to the moment the agent *acted*. Pins each pulled
+  memory's source digests at retrieval and re-checks them when its `[id]` is cited.
+  Keeps `stale_at_use` (the world moved → revalidate) apart from `orphaned_at_use` (the
+  source vanished → re-source), and a witness that bound nothing reports that the world
+  was **not checked** — never "clean".
+- **`collector.py`** — liveness for the read-ledger hook, checked against a witness the
+  collector does not own (the runtime's own session transcript). A hook can die silently
+  and leave an empty ledger indistinguishable from a quiet session while every stored
+  record keeps reading `observed`. Three-valued: OK / FAIL / **SKIP** — an absent
+  witness is never a pass.
+- **`identifier.py`** — the id contract (`uuid4().hex[:12]`), re-measured against the
+  store's own keys on every call rather than asserted in a doc. Reports the form
+  invariant (foreign ids arrive via team shards) and a three-valued fold cost, because a
+  zero on a small population is the *absence of a signal* and renders exactly like a
+  clean bill of health.
+- **`systemmap.py`** — the implemented architecture as an isometric city, projected from
+  the store the way `healthmap.py` is. Every building carries a verdict re-resolved from
+  the blob shas its memories were captured against, so the map can show which parts of
+  *itself* have gone stale — the thing a generated architecture diagram cannot do.
+
 ### Retrieval & export (everything an agent actually reads)
 - **`inject.py`** — build the `VERIFIED PROJECT MEMORY` block for a prompt:
   scope → rank → a tight, budget-capped set of memories with enforcement rules.
@@ -110,10 +139,21 @@ will navigate itself.
 - **`llm.py`** — optional provider layer (Anthropic/OpenAI/Gemini via `urllib`,
   auto-detected from env) for headless capture when no agent is present.
 - **`artifacts.py`** — generate the `api-map.md` / `linkup.md` doc artifacts.
+- **`savings.py`** — the token-savings ledger: what a pull cost (`served`) against what
+  re-reading the sources it cites would have cost (`baseline`). The baseline is
+  deliberately conservative — only files a served memory cites *and that still resolve*
+  count, capped per file, and a memory with no resolving anchor earns nothing — so the
+  figure under-reports rather than flattering itself. `inject.build_block(event=...)`
+  records it; callers that build a block only to MEASURE it pass no event, so the metric
+  can never count its own reporting.
 
 ### Interfaces
-- **`cli.py`** — the `omni-memory` command surface (status, inject, build, map,
-  check, branches, gc, flush, ui, install, hook, …). One `cmd_*` per command.
+- **`cli.py`** — the `omni-memory` command surface (status, doctor, config, inject,
+  build, check, gc, flush, systemmap, ui, gain, share, snapshot, hook, …). One `cmd_*`
+  per command. 0.10.0 cut 40 subcommands to 29 by folding duplicates into flags
+  (`map`→`check --graph`, `artifact`→`build`, `install`→`bind`, `export`/`import`→
+  `snapshot`, `inject-mode`/`branch-aware`→`config`); `hook`'s event names are a
+  contract with `install._hooks_block()` and the published plugin's `hooks.json`.
 - **`serve.py`** — the local dashboard: a stdlib `http.server` exposing a JSON
   API, a background **watcher** that rebuilds on git/file changes, and write
   endpoints (`/api/memory/*`, `/api/doc/save`, `/api/flush`).
@@ -125,6 +165,15 @@ will navigate itself.
 ---
 
 ## Key data flows
+
+**E · Verify → use (a memory that goes stale mid-task)**
+```
+inject.build_block()  → witness.pin()      # pin the sources this pull is trusted on
+   … agent works, the code moves underneath it …
+cli `used <id>` OR capture-time extract_citations()
+   → witness.verify() → stale_at_use / orphaned_at_use reported SEPARATELY
+   → witness.note_on_use() → store.add_event()   # the next session is told
+```
 
 **A · A prompt in an IDE (the hot path)**
 ```

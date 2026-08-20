@@ -179,6 +179,12 @@ def _handler(root: Path):
             if u.path == "/api/healthmap":
                 from . import healthmap
                 return self._send(200, json.dumps(healthmap.build(store, root)))
+            if u.path == "/api/systemmap":
+                from . import systemmap
+                return self._send(200, json.dumps(systemmap.build(store, root), default=str))
+            if u.path == "/api/gain":
+                from . import savings
+                return self._send(200, json.dumps(savings.summary(store), default=str))
             if u.path == "/api/conflicts":
                 return self._send(200, json.dumps({"conflicts": store.open_conflicts()}))
             if u.path == "/api/history":

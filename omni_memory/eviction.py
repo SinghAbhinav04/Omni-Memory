@@ -13,7 +13,7 @@ losers — reversibly. Hard deletion is never automatic.
                 - citation_shield        (cited, esp. recently → protected)
 
 Score ≥ QUARANTINE → status='abandoned' (out of inject/recall, still browsable,
-`omni-memory restore`-able). Purge only removes memories quarantined > grace days
+`omni-memory gc --restore`-able). Purge only removes memories quarantined > grace days
 that were never cited, and only when explicitly asked (`gc --purge`).
 
 The citation shield means a memory the agent keeps using never gets evicted,

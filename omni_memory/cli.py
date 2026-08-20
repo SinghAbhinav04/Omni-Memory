@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time as _t
 from pathlib import Path
 
 from . import __version__, branch as branchmod, digest, gitmeta, graphbuild, inject
@@ -16,9 +17,20 @@ def _store():
     return Store(root), root
 
 
+def _report_noise_sweep(s):
+    """Tell the user when the one-time retro-sweep quarantined legacy noise. Never
+    silent: it changed their store, and the undo has to travel with the notice."""
+    n = getattr(s, "_noise_swept", 0)
+    if n:
+        print(f"omni-memory: quarantined {n} memory the current noise filter rejects "
+              "(raw chat lines / invented file anchors from an older capture). "
+              "Reversible: omni-memory gc --restore <id>", file=sys.stderr)
+
+
 def cmd_status(args):
     """`status` — layer state, current branch, memory counts, AI provider, store path."""
     s, root = _store()
+    _report_noise_sweep(s)
     _bootstrap_shared(s, root)                 # fresh clone → load committed memory
     branchmod.sync_git(s, root)
     c = s.counts()
@@ -48,32 +60,68 @@ def cmd_toggle(args):
     return 0
 
 
-def cmd_branch_aware(args):
-    """`branch-aware` — toggle scoping memory to the current branch+base vs. all branches."""
+# Every tunable setting, in one place: `key -> (default, validator, one-line help)`.
+# These were previously a bespoke subcommand each (`inject-mode`, `branch-aware`) plus
+# two flags buried in `usage`, which meant no single place listed what could be tuned.
+_CONFIG = {
+    "inject_mode": ("session", ("auto", "session", "manual"),
+                    "how memory reaches the agent: session=seed once then pull "
+                    "(default, cheapest) · auto=every prompt · manual=pull only"),
+    "branch_aware": (True, bool,
+                     "scope memory to the current branch + its base, not all branches"),
+    "inject_max_items": (8, int, "max memories in one injected block"),
+    "inject_char_budget": (1400, int, "max characters of the injected block"),
+    "inject_global_items": (3, int, "cross-project memories layered in from ~/.omni-memory"),
+    "chain_complete": (True, bool,
+                       "pull a decision's co-anchored gotchas/constraints with it"),
+    "auto_import_shared": (True, bool,
+                           "auto-load a committed omni-memory.json on a fresh clone"),
+}
+
+
+def _parse_setting(key: str, raw: str):
+    """Coerce a CLI string to the type this key declares, or raise ValueError."""
+    default, kind, _help = _CONFIG[key]
+    if isinstance(kind, tuple):
+        if raw not in kind:
+            raise ValueError(f"must be one of: {' | '.join(kind)}")
+        return raw
+    if kind is bool:
+        if raw.lower() in ("on", "true", "yes", "1"):
+            return True
+        if raw.lower() in ("off", "false", "no", "0"):
+            return False
+        raise ValueError("must be on|off")
+    return int(raw)
+
+
+def cmd_config(args):
+    """`config [key] [value]` — show or change a setting. With no arguments it lists
+    every tunable with its current value, so what can be adjusted is discoverable in
+    one place rather than spread across bespoke subcommands."""
     s, _ = _store()
-    new = not s.get_meta("branch_aware", True)
-    s.set_meta("branch_aware", new)
-    print(f"branch-aware: {'ON' if new else 'OFF'}")
-    return 0
-
-
-def cmd_inject_mode(args):
-    """`inject-mode [auto|session|manual]` — how memory reaches the agent.
-
-      session  seed the ranked block ONCE at session start, then the agent pulls
-               on demand with `omni-memory inject "<q>"` (default — saves tokens,
-               memory stays fresh via the SessionStart refresh).
-      auto     inject relevant memory into every prompt (enforced, higher token cost).
-      manual   never auto-inject, not even at session start — pull only.
-    """
-    s, _ = _store()
-    mode = getattr(args, "mode", None)
-    if mode:
-        if mode not in ("auto", "session", "manual"):
-            print("mode must be one of: auto | session | manual")
+    key = getattr(args, "key", None)
+    if not key:
+        print("OmniMemory settings  (omni-memory config <key> <value>)")
+        for k, (default, _kind, help_text) in _CONFIG.items():
+            cur = s.get_meta(k, default)
+            shown = {True: "on", False: "off"}.get(cur, cur)
+            print(f"  {k:<20} {str(shown):<9} {help_text}")
+        return 0
+    if key not in _CONFIG:
+        print(f"unknown setting '{key}'. Known: {', '.join(_CONFIG)}")
+        return 1
+    default, _kind, help_text = _CONFIG[key]
+    if getattr(args, "value", None) is not None:
+        try:
+            s.set_meta(key, _parse_setting(key, args.value))
+        except ValueError as e:
+            print(f"{key}: {e}")
             return 1
-        s.set_meta("inject_mode", mode)
-    print(f"inject-mode: {s.get_meta('inject_mode', 'session')}")
+    cur = s.get_meta(key, default)
+    shown = {True: "on", False: "off"}.get(cur, cur)
+    print(f"{key}: {shown}")
+    print(f"  {help_text}")
     return 0
 
 
@@ -103,10 +151,10 @@ def cmd_remember(args):
 
 
 def cmd_lock(args):
-    """`lock <id>` / `unlock <id>` — pin a memory as constitutional (never decays
-    or gets evicted) or release it. For architecture, identity, and standing rules."""
+    """`lock <id> [--off]` — pin a memory as constitutional (never decays or gets
+    evicted), or release it. For architecture, identity, and standing rules."""
     s, _ = _store()
-    on = args.cmd == "lock"
+    on = not getattr(args, "off", False)
     ok = s.set_protected(args.id, on)
     print(f"[+] {'🔒 locked' if on else 'unlocked'} [{args.id}]" if ok
           else f"no memory with id {args.id}")
@@ -164,7 +212,13 @@ def cmd_history(args):
 
 
 def cmd_capture(args):
-    """Ingest the agent's extraction JSON (stdin) → memories."""
+    """`capture [--prompt build|session]` — ingest the agent's extraction JSON from
+    stdin. `--prompt` prints the extraction instructions instead, which is the other
+    half of the same pipe: `omni-memory capture --prompt` → agent → `capture`."""
+    which = getattr(args, "prompt", None)
+    if which:
+        print(sm.BUILD_PROMPT if which == "build" else sm.EXTRACTION_PROMPT)
+        return 0
     s, root = _store()
     if hasattr(sys.stdin, "reconfigure"):
         try:
@@ -176,14 +230,6 @@ def cmd_capture(args):
     digest.write_digest(s)
     note = f"; {dropped} dropped as noise" if dropped else ""
     print(f"[+] captured {n} mem{note}  (branch {gitmeta.current_branch(root)}); digest updated")
-    return 0
-
-
-def cmd_digest(args):
-    """`digest` — (re)render the store into `.omni-memory/MEMORY.md`."""
-    s, _ = _store()
-    out = digest.write_digest(s)
-    print(f"[+] knowledge base → {out}")
     return 0
 
 
@@ -214,12 +260,20 @@ def cmd_build(args):
             items = llm.extract_memories(sm.BUILD_PROMPT, ctx)
             ai_added, _dropped = sm.remember_many(s, root, items, source="ai-build")
             print(f"[+] AI wrote {ai_added} facts from the codebase")
+        except Exception as e:  # noqa: BLE001
+            print(f"[!] AI pass failed ({e}); falling back to docs.")
+            use_ai = False
+
+    # AI-written docs (api-map / linkup). On by default with a key, since a build that
+    # read the whole codebase and then declined to write the docs was the surprise the
+    # separate `artifact` command existed to undo.
+    if not args.no_docs_gen and llm.available():
+        try:
             from . import artifacts
             for p in artifacts.generate_all(s, root):
                 print(f"[+] artifact → {p}")
         except Exception as e:  # noqa: BLE001
-            print(f"[!] AI pass failed ({e}); falling back to docs.")
-            use_ai = False
+            print(f"[!] artifact generation failed ({e})")
 
     doc_added, scanned = (0, 0)
     if not args.no_docs:
@@ -235,33 +289,6 @@ def cmd_build(args):
     return 0
 
 
-def cmd_prompt(args):
-    """`prompt build|session` — print the extraction instructions for the agent to
-    follow, whose JSON output is then piped back into `capture`."""
-    print(sm.BUILD_PROMPT if args.which == "build" else sm.EXTRACTION_PROMPT)
-    return 0
-
-
-def cmd_artifact(args):
-    """Generate the AI-written docs (api-map / linkup)."""
-    from . import artifacts, llm
-    if not llm.available():
-        print("[i] needs a model key. export GEMINI_API_KEY=... then retry.")
-        return 1
-    s, root = _store()
-    which = args.which
-    print(f"[*] generating {which} via {llm.provider()} …")
-    try:
-        if which in ("apimap", "all"):
-            print(f"[+] {artifacts.generate_apimap(s, root)}")
-        if which in ("linkup", "all"):
-            print(f"[+] {artifacts.generate_linkup(s, root)}")
-    except Exception as e:  # noqa: BLE001
-        print(f"[!] failed: {e}")
-        return 1
-    return 0
-
-
 def cmd_inject(args):
     """`inject <query>` — print the VERIFIED PROJECT MEMORY block for a request
     (what the agent should treat as ground truth at the start of a task)."""
@@ -270,7 +297,7 @@ def cmd_inject(args):
         return 0
     branchmod.refresh_if_stale(s, root)         # a pull always reflects the current code
     block = inject.build_block(s, root, query=" ".join(args.query or []),
-                               files=args.file or None)
+                               files=args.file or None, event="pull")
     if block:
         print(block)
     return 0
@@ -304,16 +331,32 @@ def cmd_branches(args):
 
 
 def cmd_check(args):
-    """Re-anchor memories against git: flag any whose code changed since they
-    were written as ⚠ stale (they keep their content — re-verify, don't trust).
-    Rebuilds the code graph first so staleness is symbol/caller-precise."""
+    """`check [--graph]` — re-anchor memories against git: flag any whose code changed
+    since they were written as ⚠ stale (they keep their content — re-verify, don't
+    trust). The code graph is rebuilt first either way, so staleness is symbol/caller-
+    precise; `--graph` additionally rebuilds and writes the knowledge graph JSON the
+    dashboard reads, and reports the code-graph backend."""
     from . import staleness
-    from .graph import build as codegraph
+    from .graph import build as codegraph, extract
     s, root = _store()
+    if getattr(args, "graph", False):
+        branchmod.sync_git(s, root)
+        g = graphbuild.build_graph(s, root)
+        out = s.dir / "graph.json"
+        out.write_text(json.dumps(g, indent=2), encoding="utf-8")
+        print(f"[+] memory graph: {len(g['nodes'])} nodes, "
+              f"{len(g['edges'])} edges → {out}")
     try:
-        codegraph.build_code_graph(s, root)
+        cg = codegraph.build_code_graph(s, root)
     except Exception:  # noqa: BLE001
-        pass  # fall back to file-level staleness
+        cg = None  # fall back to file-level staleness
+    if getattr(args, "graph", False) and cg and cg["files_parsed"]:
+        print(f"[+] code graph ({cg['backend']}): {cg['nodes']} symbols, "
+              f"{cg['edges']} edges over {cg['files_parsed']} file(s)")
+        print(f"    {cg['kinds']}  ·  {cg['rels']}")
+        if not extract.available():
+            print("    [i] deep multi-language graph needs tree-sitter → "
+                  "pip install omni-memory-agent (Python is graphed via stdlib ast).")
     r = staleness.recompute(s, root)
     print(f"[+] checked {r['checked']} anchored memory · {r['stale']} stale · "
           f"{r['cleared']} cleared  ({r['level']}-level)")
@@ -321,7 +364,7 @@ def cmd_check(args):
     sw = eviction.sweep(s, root, dry_run=False, purge=False)
     if sw["quarantined"]:
         print(f"[+] quarantined {len(sw['quarantined'])} dead/false memory "
-              f"(reversible: omni-memory restore <id|branch>)")
+              f"(reversible: omni-memory gc --restore <id|branch>)")
         for c in sw["quarantined"][:8]:
             print(f"    ⊘ [{c['id']}] {c['reason']}: {c['text']}")
     if sw["purgeable"]:
@@ -344,23 +387,40 @@ def cmd_forget(args):
     return 0
 
 
-def cmd_map(args):
-    s, root = _store()
-    branchmod.sync_git(s, root)
-    g = graphbuild.build_graph(s, root)
-    out = s.dir / "graph.json"
-    out.write_text(json.dumps(g, indent=2), encoding="utf-8")
-    print(f"[+] memory graph: {len(g['nodes'])} nodes, {len(g['edges'])} edges → {out}")
+def cmd_systemmap(args):
+    """`systemmap [-o FILE]` — write the interactive system map as one self-contained
+    HTML file: the implemented architecture as an isometric city, every claim carrying
+    a citation and a provenance verdict re-resolved against the code right now.
 
-    from .graph import build as codegraph, extract
-    cg = codegraph.build_code_graph(s, root)
-    if cg["files_parsed"]:
-        print(f"[+] code graph ({cg['backend']}): {cg['nodes']} symbols, "
-              f"{cg['edges']} edges over {cg['files_parsed']} file(s)")
-        print(f"    {cg['kinds']}  ·  {cg['rels']}")
-    if not extract.available():
-        print("    [i] deep multi-language graph needs tree-sitter → "
-              "pip install omni-memory-agent (Python is graphed via stdlib ast).")
+    Unlike a generated architecture diagram, this one can show where it has gone stale:
+    a building whose cited source drifted renders degraded, a deleted source renders
+    orphaned. The file makes no network request, so it keeps working after the checkout
+    it describes is gone.
+    """
+    from . import systemmap
+    s, root = _store()
+    branchmod.refresh_if_stale(s, root)          # the map must reflect the code as it is
+    model = systemmap.build(s, root)
+    if not model["nodes"]:
+        print("nothing to map yet — run `omni-memory check --graph` for the code graph, then "
+              "`omni-memory build` (or work a session) to capture memory.")
+        return 1
+    out = Path(args.out) if getattr(args, "out", None) else root / f"{root.name}-system-map.html"
+    out.write_text(systemmap.artifact(s, root), encoding="utf-8")
+    st, r = model["stats"], model["repository"]
+    v = st["verdicts"]
+    print(f"[+] system map → {out}")
+    print(f"    {st['buildings']} buildings · {st['routes']} routes · {st['flows']} flows "
+          f"· branch {r['branch']} @ {r['commitShort'] or 'no commit'}")
+    # Report the decay honestly: a map that only says how much it drew would be the
+    # confident-and-wrong artifact this whole design exists to avoid.
+    parts = [f"{n} {k.lower()}" for k, n in sorted(v.items()) if n]
+    print(f"    evidence: {', '.join(parts)}"
+          + (f" · {st['notBindable']} memories not bindable (no source anchor)"
+             if st["notBindable"] else ""))
+    if v.get("DRIFTED") or v.get("ORPHANED"):
+        print("    [i] drifted/orphaned buildings rest on sources that moved or vanished "
+              "— re-verify before trusting them.")
     return 0
 
 
@@ -413,9 +473,9 @@ def cmd_flush(args):
         agentsmd.write(s, root)
     except Exception:  # noqa: BLE001
         pass
-    hint = {"all": "omni-memory build   (or map + check)",
+    hint = {"all": "omni-memory build   (or check --graph)",
             "memory": "omni-memory build",
-            "graph": "omni-memory map"}[scope]
+            "graph": "omni-memory check --graph"}[scope]
     print(f"    rebuild with: {hint}")
     return 0
 
@@ -430,11 +490,25 @@ def _open_store(use_global):
 
 
 def cmd_share(args):
-    """`share` — export your memories to a committed per-author shard under
+    """`share [--status]` — export your memories to a committed per-author shard under
     `.omni-memory/team/`, so teammates get them on their next session. Each author
-    owns a distinct file, so it merges without conflicts."""
+    owns a distinct file, so it merges without conflicts. `--status` reports who has
+    contributed to this project's memory instead of writing anything."""
     from . import team
     s, root = _store()
+    if getattr(args, "status", False):
+        st = team.status(s, root)
+        print(f"you: {st['me'] or '(no git identity — set git config user.email)'}")
+        print("memory by author:")
+        for r in st["by_author"]:
+            print(f"  {r['c']:>4}  {r['a']}")
+        if st["shards"]:
+            print("committed shards: " + ", ".join(st["shards"]))
+        if not st["enabled"]:
+            print("team sharing not set up — `omni-memory share` writes your shard, "
+                  "commit it,")
+            print("teammates `git pull` then sync automatically at session start.")
+        return 0
     path = team.write_shard(s, root)
     if not path:
         print("no git identity — set `git config user.email` first, then re-run.")
@@ -464,65 +538,57 @@ def cmd_sync(args):
     return 0
 
 
-def cmd_team(args):
-    """`team` — who has contributed to this project's memory, and shard status."""
-    from . import team
-    s, root = _store()
-    st = team.status(s, root)
-    print(f"you: {st['me'] or '(no git identity — set git config user.email)'}")
-    print("memory by author:")
-    for r in st["by_author"]:
-        print(f"  {r['c']:>4}  {r['a']}")
-    if st["shards"]:
-        print("committed shards: " + ", ".join(st["shards"]))
-    if not st["enabled"]:
-        print("team sharing not set up — `omni-memory share` writes your shard, commit it,")
-        print("teammates `git pull` then sync automatically at session start.")
-    return 0
+def cmd_snapshot(args):
+    """`snapshot [--in|--out FILE] [--global]` — portable JSON memory, both ways.
 
-
-def cmd_export(args):
-    """`export [file] [--global]` — write a portable JSON snapshot of memories.
-    Default target is `omni-memory.json` at the repo root; commit it to share the
-    memory with teammates / other clones, or move it to another machine/IDE."""
+    `--out` (default) writes a snapshot; commit it to share memory across clones and
+    IDEs. `--in` loads one, skipping ids that already exist, so it is safe to re-run
+    and safe to merge several snapshots. Default path is `omni-memory.json` at the repo
+    root — the same file `_bootstrap_shared` auto-loads on a fresh clone."""
     s, root = _open_store(args.glob)
+    default = find_project_root() / "omni-memory.json"
+    if getattr(args, "in_file", None) is not None:
+        src = Path(args.in_file) if args.in_file else default
+        if not src.exists():
+            print(f"no snapshot at {src}  "
+                  "(run `omni-memory snapshot` first, or pass a path).")
+            return 1
+        try:
+            data = json.loads(src.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            print(f"[!] couldn't read snapshot: {e}")
+            return 1
+        n = s.import_memories(data)
+        digest.write_digest(s)
+        try:
+            from . import agentsmd
+            agentsmd.write(s, root)
+        except Exception:  # noqa: BLE001
+            pass
+        print(f"[+] imported {n} new memories from {src}")
+        return 0
     data = s.export_memories()
-    out = Path(args.file) if args.file else (find_project_root() / "omni-memory.json")
+    out = Path(args.out) if getattr(args, "out", None) else default
     out.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"[+] exported {len(data['memories'])} memories → {out}")
-    if not args.file:
+    if not getattr(args, "out", None):
         print("    tip: commit omni-memory.json to share memory across clones/IDEs.")
     return 0
 
 
-def cmd_import(args):
-    """`import [file] [--global]` — load memories from a JSON export into this
-    store (existing ids skipped, so it's safe to re-run and to merge exports)."""
-    s, root = _open_store(args.glob)
-    src = Path(args.file) if args.file else (find_project_root() / "omni-memory.json")
-    if not src.exists():
-        print(f"no export file at {src}  (run `omni-memory export` first, or pass a path).")
-        return 1
-    try:
-        data = json.loads(src.read_text(encoding="utf-8"))
-    except Exception as e:  # noqa: BLE001
-        print(f"[!] couldn't read export: {e}")
-        return 1
-    n = s.import_memories(data)
-    digest.write_digest(s)
-    try:
-        from . import agentsmd
-        agentsmd.write(s, root)
-    except Exception:  # noqa: BLE001
-        pass
-    print(f"[+] imported {n} new memories from {src}")
-    return 0
+def cmd_gain(args):
+    """`gain [--history] [--reset] [--max-items N] [--budget CHARS]` — what memory
+    actually bought you, in tokens, plus the footprint it costs and the knobs to tune it.
 
-
-def cmd_usage(args):
-    """`usage [--max-items N] [--budget CHARS]` — show the approximate token
-    footprint of everything OmniMemory injects, and tune the per-prompt cost."""
+    The saving is the difference between the block the agent was handed and what it
+    would have had to READ to learn the same things. Both figures are estimates and the
+    method is printed alongside them, because a number nobody can check is exactly the
+    kind of confident claim this project exists to avoid."""
+    from . import savings as sv
     s, root = _store()
+    if getattr(args, "reset", False):
+        n = s.clear_savings()
+        print(f"[+] cleared {n} ledger entries.\n")
     if args.max_items is not None:
         s.set_meta("inject_max_items", args.max_items)
     if args.budget is not None:
@@ -530,9 +596,42 @@ def cmd_usage(args):
     if args.max_items is not None or args.budget is not None:
         print("[+] updated injection limits.\n")
 
-    def toks(txt):
-        return (len(txt or "") + 3) // 4        # rough ~4 chars/token
+    if getattr(args, "history", False):
+        rows = sv.history(s)
+        if not rows:
+            print("no pulls recorded yet.")
+            return 0
+        print(f"{'when':<17}{'event':<10}{'served':>8}{'baseline':>10}{'saved':>9}  mem")
+        for r in rows:
+            when = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(r["ts"] or 0))
+            print(f"{when:<17}{r['event']:<10}{sv.human(r['served']):>8}"
+                  f"{sv.human(r['baseline']):>10}{sv.human(r['saved']):>9}"
+                  f"  {len(r['mem_ids'])} mem · {r['files']} src")
+        return 0
 
+    g = sv.summary(s)
+    print(f"OmniMemory token savings  ·  project: {root.name}")
+    if not g["pulls"]:
+        print("  no pulls recorded yet — memory is measured as it is used.")
+        print("  run `omni-memory inject \"<question>\"`, or start a session, then re-run.")
+    else:
+        since = _t.strftime("%Y-%m-%d", _t.localtime(g["first_ts"] or 0))
+        print(f"  pulls            : {g['pulls']}  ·  {g['sessions']} session seed(s)"
+              f"  ·  since {since}")
+        print(f"  served           : {sv.human(g['served']):>8} tok    "
+              "what memory actually cost")
+        print(f"  baseline (re-read): {sv.human(g['baseline']):>7} tok    "
+              "reading the cited sources instead")
+        print(f"  saved            : {sv.human(g['saved']):>8} tok    ({g['pct']}%)")
+        r = g["recent"]
+        if r["pulls"]:
+            avg = sv.human(r["saved"] // r["pulls"])
+            print(f"  last {g['recent_days']} days      : {sv.human(r['saved']):>8} saved"
+                  f"  ·  avg {avg} / pull")
+
+    # Footprint: what memory costs right now. No `event=`, so this measurement pass is
+    # never itself recorded as a pull — otherwise looking at the metric would inflate it.
+    toks = sv.tokens
     block = inject.build_block(s, root, query="")
     ag = root / "AGENTS.md"
     ag_block = ""
@@ -544,20 +643,17 @@ def cmd_usage(args):
     mem_md = s.dir / "MEMORY.md"
     mi = int(s.get_meta("inject_max_items", inject._MAX_ITEMS))
     cb = int(s.get_meta("inject_char_budget", inject._CHAR_BUDGET))
-    print("OmniMemory token footprint  (approx · ~4 chars/token)")
-    print(f"  per-prompt injection : ~{toks(block):>4} tok   · rides EVERY message")
-    print(f"  session-start seed   : ~{toks(block):>4} tok   · once per session")
-    print(f"  AGENTS.md standing   : ~{toks(ag_block):>4} tok   · loaded by Antigravity/Cursor each session")
-    if mem_md.exists():
-        print(f"  MEMORY.md (@-ref)    : ~{toks(mem_md.read_text(encoding='utf-8', errors='ignore')):>4} tok   · only if you @-reference it")
-    print(f"\n  settings: max_items={mi}  char_budget={cb}")
-    print("  per-prompt block re-injects only when memory changes (deduped) —"
-          " not every turn.")
+    print(f"\n  footprint now: seed ~{toks(block)} tok · AGENTS.md ~{toks(ag_block)} tok"
+          + (f" · MEMORY.md ~{toks(mem_md.read_text(encoding='utf-8', errors='ignore'))}"
+             " tok (@-ref only)" if mem_md.exists() else ""))
+    print(f"  settings: max_items={mi}  char_budget={cb}"
+          "        tune: gain --max-items 6 --budget 1000")
     from . import llm
     cap = "LLM" if llm.autocapture_ok() else "heuristic (free — no claude -p on autopilot)"
     print(f"  SessionEnd auto-capture: {cap}."
-          + ("" if llm.autocapture_ok() else " Set OMNI_HEADLESS_LLM=1 or an API key for LLM capture."))
-    print("  lower it: omni-memory usage --max-items 6 --budget 1000")
+          + ("" if llm.autocapture_ok()
+             else " Set OMNI_HEADLESS_LLM=1 or an API key for LLM capture."))
+    print(f"\n  method: {g['method']}")
     return 0
 
 
@@ -619,7 +715,7 @@ def _bootstrap_shared(s, root):
     Security: the file is repo-controlled, so imported memories are tagged
     source="shared" (rendered ↗external, NOT trusted as this project's own truth),
     size-capped, and the whole behavior is gated by the `auto_import_shared` meta
-    flag (set it false to require an explicit `omni-memory import`)."""
+    flag (set it false to require an explicit `omni-memory snapshot --in`)."""
     try:
         if not s.get_meta("auto_import_shared", True):
             return
@@ -651,9 +747,11 @@ def _run_hook(args):
     s, root = _store()
     if not s.get_meta("enabled", True):
         return 0
+    _report_noise_sweep(s)                     # stderr, so it can't pollute the block
     mode = s.get_meta("inject_mode", "session")   # session (default) | auto | manual
     if args.event == "start":                  # SessionStart → refresh + ensure AGENTS.md
         s.clear_read_ledger()                  # fresh session: prior-session reads must not bind now
+        s.clear_witness()                      # ...and a prior session's pins can't date THIS task's window
         _bootstrap_shared(s, root)             # fresh clone → load committed memory (legacy single file)
         try:                                    # team sync: pull teammates' shards every session
             from . import team
@@ -676,7 +774,7 @@ def _run_hook(args):
                 print("=== RECENT ACTIVITY (prior sessions) ===")
                 for e in evs:
                     print(f"· {e['summary']} — branch {e['branch']}")
-            block = inject.build_block(s, root, query="")
+            block = inject.build_block(s, root, query="", event="session")
             if block:
                 print(block)                    # grounds a cold agent; then it pulls on demand
                 _mark_injected(s, block)
@@ -685,7 +783,8 @@ def _run_hook(args):
         if mode != "auto":                      # pull mode (default): the agent fetches
             return 0                            # memory itself via `omni-memory inject` — no
                                                 # per-prompt token cost, memory kept fresh above
-        block = inject.build_block(s, root, query=data.get("prompt", ""))
+        block = inject.build_block(s, root, query=data.get("prompt", ""),
+                                   event="prompt")
         # auto mode only: de-dupe so an identical block isn't re-emitted every prompt.
         if block and _should_inject(s, block):
             print(block)                        # stdout is added to the prompt context
@@ -724,7 +823,20 @@ def _run_hook(args):
             # citation feedback: lift memories the agent actually cited [id]
             ids = {r["id"] for r in s.db.execute(
                 "SELECT id FROM memory WHERE status='active'")}
-            bumped = s.bump_uses(sm.extract_citations(text, ids))
+            cited = sm.extract_citations(text, ids)
+            bumped = s.bump_uses(cited)
+            try:
+                # VERIFY -> USE, retrospectively. After the fact still matters: it says
+                # the memory the agent ACTED on had already moved, so the work may rest
+                # on a stale answer. The eager path is `omni-memory used`; this one
+                # always runs, so the window can't go unnoticed just because the agent
+                # never called it.
+                from . import witness
+                note = witness.note_on_use(s, root, cited)
+                if note:
+                    print(f"omni-memory: {note}", file=sys.stderr)
+            except Exception:  # noqa: BLE001
+                pass
             digest.write_digest(s)
             try:
                 from . import agentsmd
@@ -751,18 +863,50 @@ def _run_hook(args):
 
 
 def cmd_used(args):
-    """Record that memories were used/cited (feeds the relevance ranker)."""
-    s, _ = _store()
+    """`used <id>…` — record that memories were cited, and re-verify them AT THE POINT
+    OF USE: the sources pinned when they were pulled are re-read now, so a memory that
+    went stale mid-task is caught before it is acted on further."""
+    s, root = _store()
     n = s.bump_uses(args.id)
     print(f"[+] recorded use of {n} memory")
+    from . import witness
+    r = witness.verify(s, root, args.id)
+    if not r["checked"]:
+        return 0
+    if not r["valid"]:
+        # Never "clean" — we did not check the world, and saying otherwise is the whole
+        # failure this window exists to name.
+        print("[i] the world was NOT checked: no source was bound when these were pulled "
+              f"(sources bound {r['sources_bound']}).")
+        return 0
+    print(f"    verified at use: {r['summary']} (sources bound {r['sources_bound']}, "
+          f"{r['observation_bound']} observation-bound)")
+    for s_ in r["stale_at_use"]:
+        print(f"    ⚠ STALE AT USE [{s_['mem_id']}] {s_['path']}: moved since it was "
+              f"pulled ({s_['pinned']} → {s_['current']}) — revalidate before relying on it")
+    for o in r["orphaned_at_use"]:
+        print(f"    ⚠ ORPHANED AT USE [{o['mem_id']}] {o['path']}: gone since it was "
+              "pulled — re-source, don't revalidate")
+    for lim in r["limits"]:
+        print(f"    [i] {lim}")
+    if r["stale_at_use"] or r["orphaned_at_use"]:
+        witness.note_on_use(s, root, args.id)      # durable, so the next session sees it
     return 0
 
 
 def cmd_gc(args):
-    """Garbage-collect dead/false memory: quarantine abandoned-branch and stale
-    memories (reversible); --purge hard-deletes long-quarantined uncited ones."""
+    """`gc [--dry-run] [--purge] [--restore <id|branch>]` — garbage-collect dead/false
+    memory: quarantine abandoned-branch and stale memories (reversible); --purge
+    hard-deletes long-quarantined uncited ones; --restore un-quarantines a memory by id
+    or every memory from a branch. Restore lives here because quarantine does."""
     from . import eviction
     s, root = _store()
+    target = getattr(args, "restore", None)
+    if target:
+        n = s.restore(target) or s.restore_branch(target)
+        print(f"[+] restored {n} memory" if n
+              else "nothing to restore for that id/branch.")
+        return 0 if n else 1
     sw = eviction.sweep(s, root, dry_run=args.dry_run, purge=args.purge)
     verb = "would quarantine" if args.dry_run else "quarantined"
     noise = sw.get("noise", [])
@@ -778,14 +922,6 @@ def cmd_gc(args):
     elif sw["purgeable"]:
         print(f"[i] {len(sw['purgeable'])} eligible for purge "
               f"(quarantined >grace, never cited) — add --purge to delete")
-    return 0
-
-
-def cmd_restore(args):
-    """Un-quarantine a memory by id, or every memory from a branch."""
-    s, _ = _store()
-    n = s.restore(args.target) or s.restore_branch(args.target)
-    print(f"[+] restored {n} memory" if n else "nothing to restore for that id/branch.")
     return 0
 
 
@@ -818,12 +954,6 @@ def cmd_key(args):
 def cmd_ui(args):
     from . import serve
     return serve.run_ui(port=args.port)
-
-
-def cmd_install(args):
-    """`install [--platform]` — wire hooks + AGENTS.md into a specific IDE."""
-    from . import install
-    return install.install(platform=args.platform)
 
 
 def cmd_bind(args):
@@ -917,7 +1047,7 @@ def cmd_doctor(args):
     funcs = sum(1 for n in all_nodes if n["kind"] != "file")
     files = len(all_nodes) - funcs
     line(funcs > 0, "code graph", f"{funcs} symbols ({files} files)",
-         "run `omni-memory map`; non-Python needs tree-sitter or the regex backend")
+         "run `omni-memory check --graph`; non-Python needs tree-sitter or the regex backend")
     c = s.counts()
     active = c.get("active", 0)
     stale = s.db.execute("SELECT COUNT(*) n FROM memory WHERE status='active' AND stale=1").fetchone()["n"]
@@ -947,7 +1077,37 @@ def cmd_doctor(args):
                  "install the read hook (`omni-memory bind`) so capture binds to what was read")
     except Exception:  # noqa: BLE001
         pass
-    _doctor_read_collector(s, root, line)          # is the read hook actually ALIVE?
+    _doctor_read_collector(s, root, line)          # WOULD the read hook work if invoked?
+    try:
+        # ...and DID it actually run? Different question, and it needs a witness the
+        # collector doesn't own — the runtime's own session transcript. A hook that was
+        # never registered leaves an empty ledger that looks exactly like a quiet
+        # session, while every stored record keeps claiming `observed`.
+        from . import collector
+        lv = collector.liveness(s, root)
+        line({"OK": True, "FAIL": False, "SKIP": None}[lv["verdict"]],
+             "collector ran (external witness)", f"{lv['verdict']} — {lv['why']}",
+             lv["remedy"])
+    except Exception:  # noqa: BLE001
+        pass
+    try:                                           # identifier contract, re-measured now
+        from . import identifier
+        ic = identifier.identifier_contract(s)
+        if ic["keys"]:
+            # off-form ids are a real failure (foreign ids arrive via team shards);
+            # the fold cost is a pre-flight, and its zero is reported three-valued so an
+            # undersized population can't read as a clean bill of health.
+            detail = (f"{ic['keys']} ids, {ic['verdict'].lower().replace('_', ' ')} "
+                      f"({ic['why']}); headroom {ic['headroom_chars']} char(s)")
+            if ic["off_form_count"]:
+                detail = (f"⚠ {ic['off_form_count']} id(s) outside the declared form "
+                          f"({identifier.DECLARED}): "
+                          f"{', '.join(ic['off_form'][:4])} · " + detail)
+            line(not ic["off_form_count"], "identifier contract", detail,
+                 "off-form ids usually arrive via an imported/team shard from another "
+                 "version — re-export it with a matching omni-memory")
+    except Exception:  # noqa: BLE001
+        pass
     agents = (root / "AGENTS.md").exists()
     line(agents, "AGENTS.md", "present (cross-IDE context)" if agents else "missing",
          "run `omni-memory bind`")
@@ -986,85 +1146,128 @@ def main(argv=None):
     p.add_argument("--version", action="version", version=f"omni-memory {__version__}")
     sub = p.add_subparsers(dest="cmd")
 
-    sub.add_parser("status")
-    sub.add_parser("on"); sub.add_parser("off")
-    im = sub.add_parser("inject-mode")
-    im.add_argument("mode", nargs="?", choices=["auto", "session", "manual"])
-    sub.add_parser("branch-aware")
-    r = sub.add_parser("remember"); r.add_argument("--kind", default="fact")
-    r.add_argument("--global", dest="glob", action="store_true", help="store in the shared ~/.omni-memory (injects everywhere)")
-    r.add_argument("--verified", action="store_true", help="confirmed by outcome (trusted, pruned last)")
-    r.add_argument("--inferred", action="store_true", help="guessed from code/context (pruned first)")
-    r.add_argument("--lock", action="store_true", help="protect: never decays or gets evicted")
-    r.add_argument("text", nargs="+")
-    lk = sub.add_parser("lock"); lk.add_argument("id")
-    ul = sub.add_parser("unlock"); ul.add_argument("id")
-    sub.add_parser("conflicts")
-    rs = sub.add_parser("resolve"); rs.add_argument("id")
-    rs.add_argument("--keep", action="store_true", help="this memory wins (default)")
-    rs.add_argument("--both", action="store_true", help="keep both; just clear the flag")
-    hs = sub.add_parser("history"); hs.add_argument("id")
-    sub.add_parser("share"); sub.add_parser("sync"); sub.add_parser("team")
-    sub.add_parser("capture")
-    ij = sub.add_parser("inject"); ij.add_argument("query", nargs="*"); ij.add_argument("--file", action="append")
-    rc = sub.add_parser("recall"); rc.add_argument("query", nargs="+")
-    sub.add_parser("branches")
-    fg = sub.add_parser("forget"); fg.add_argument("id")
-    us = sub.add_parser("used"); us.add_argument("id", nargs="+")
-    gc = sub.add_parser("gc")
-    gc.add_argument("--dry-run", action="store_true", help="preview, change nothing")
-    gc.add_argument("--purge", action="store_true",
-                    help="hard-delete long-quarantined, never-cited memory")
-    rs = sub.add_parser("restore"); rs.add_argument("target", help="memory id or branch")
-    sub.add_parser("map")
-    sub.add_parser("check")
-    sub.add_parser("digest")
-    bd = sub.add_parser("build")
-    bd.add_argument("--no-docs", action="store_true")
-    bd.add_argument("--no-ai", action="store_true", help="skip the model pass")
-    pr = sub.add_parser("prompt"); pr.add_argument("which", nargs="?", default="build",
-                                                   choices=["build", "session"])
-    ar = sub.add_parser("artifact"); ar.add_argument("which", nargs="?", default="all",
-                                                     choices=["apimap", "linkup", "all"])
-    fl = sub.add_parser("flush")
-    fl.add_argument("--scope", choices=["all", "memory", "graph"], default="all")
-    fl.add_argument("--yes", "-y", action="store_true", help="skip confirmation")
-    hk = sub.add_parser("hook")
-    hk.add_argument("event", choices=["start", "inject", "capture", "precompact", "read"])
-    ky = sub.add_parser("key"); ky.add_argument("provider", choices=["gemini", "anthropic", "openai"])
-    ui = sub.add_parser("ui"); ui.add_argument("--port", type=int, default=7777)
-    ins = sub.add_parser("install"); ins.add_argument("--platform", default="claude-code")
-    bn = sub.add_parser("bind")
+    # -- setup & state --------------------------------------------------------
+    sub.add_parser("status", help="layer state, branch, memory counts, store path")
+    sub.add_parser("doctor", help="diagnose the setup; every line says how to fix it")
+    cf = sub.add_parser("config", help="show or change a setting (no args = list all)")
+    cf.add_argument("key", nargs="?", help="setting name")
+    cf.add_argument("value", nargs="?", help="new value")
+    sub.add_parser("on", help="enable the memory layer")
+    sub.add_parser("off", help="disable the memory layer")
+    bn = sub.add_parser("bind", help="wire an IDE: session hooks + AGENTS.md")
     bn.add_argument("ide", nargs="?", default="auto",
                     choices=["auto", "claude-code", "opencode", "antigravity",
                              "cursor", "windsurf"],
                     help="which IDE to bind (default: auto-detect)")
-    sub.add_parser("doctor")
-    ug = sub.add_parser("usage")
-    ug.add_argument("--max-items", type=int, help="max memories injected per prompt")
-    ug.add_argument("--budget", type=int, help="max chars of the injected block")
-    ex = sub.add_parser("export")
-    ex.add_argument("file", nargs="?", help="output path (default: ./omni-memory.json)")
-    ex.add_argument("--global", dest="glob", action="store_true", help="the shared ~/.omni-memory store")
-    im = sub.add_parser("import")
-    im.add_argument("file", nargs="?", help="input path (default: ./omni-memory.json)")
-    im.add_argument("--global", dest="glob", action="store_true", help="into the shared ~/.omni-memory store")
+    ky = sub.add_parser("key", help="store a model API key (chmod 600, gitignored)")
+    ky.add_argument("provider", choices=["gemini", "anthropic", "openai"])
+
+    # -- using memory ---------------------------------------------------------
+    r = sub.add_parser("remember", help="add one memory by hand")
+    r.add_argument("--kind", default="fact")
+    r.add_argument("--global", dest="glob", action="store_true",
+                   help="store in the shared ~/.omni-memory (injects everywhere)")
+    r.add_argument("--verified", action="store_true",
+                   help="confirmed by outcome (trusted, pruned last)")
+    r.add_argument("--inferred", action="store_true",
+                   help="guessed from code/context (pruned first)")
+    r.add_argument("--lock", action="store_true",
+                   help="protect: never decays or gets evicted")
+    r.add_argument("text", nargs="+")
+    rc = sub.add_parser("recall", help="search memory instead of grepping")
+    rc.add_argument("query", nargs="+")
+    ij = sub.add_parser("inject", help="print the VERIFIED PROJECT MEMORY block")
+    ij.add_argument("query", nargs="*")
+    ij.add_argument("--file", action="append")
+    us = sub.add_parser("used", help="record citation + re-verify at the point of use")
+    us.add_argument("id", nargs="+")
+    fg = sub.add_parser("forget", help="drop one memory")
+    fg.add_argument("id")
+    lk = sub.add_parser("lock", help="pin a memory as constitutional (never evicted)")
+    lk.add_argument("id")
+    lk.add_argument("--off", action="store_true", help="release it instead")
+
+    # -- keeping it fresh -----------------------------------------------------
+    bd = sub.add_parser("build", help="bootstrap memory + docs from the repo")
+    bd.add_argument("--no-docs", action="store_true", help="skip the markdown scan")
+    bd.add_argument("--no-ai", action="store_true", help="skip the model pass")
+    bd.add_argument("--no-docs-gen", action="store_true",
+                    help="skip generating the api-map / linkup artifacts")
+    ck = sub.add_parser("check", help="re-anchor vs git; flag ⚠ stale memories")
+    ck.add_argument("--graph", action="store_true",
+                    help="also rebuild + write the knowledge graph the dashboard reads")
+    cp = sub.add_parser("capture", help="ingest extraction JSON from stdin")
+    cp.add_argument("--prompt", nargs="?", const="build",
+                    choices=["build", "session"],
+                    help="print the extraction instructions instead of ingesting")
+    gc = sub.add_parser("gc", help="quarantine dead/false memory (reversible)")
+    gc.add_argument("--dry-run", action="store_true", help="preview, change nothing")
+    gc.add_argument("--purge", action="store_true",
+                    help="hard-delete long-quarantined, never-cited memory")
+    gc.add_argument("--restore", metavar="ID|BRANCH",
+                    help="un-quarantine a memory id, or a whole branch")
+    fl = sub.add_parser("flush", help="wipe the store so it can be rebuilt")
+    fl.add_argument("--scope", choices=["all", "memory", "graph"], default="all")
+    fl.add_argument("--yes", "-y", action="store_true", help="skip confirmation")
+
+    # -- seeing it ------------------------------------------------------------
+    smp = sub.add_parser("systemmap", help="self-contained HTML architecture map")
+    smp.add_argument("-o", "--out", help="output path (default <repo>-system-map.html)")
+    ui = sub.add_parser("ui", help="local dashboard")
+    ui.add_argument("--port", type=int, default=7777)
+    gn = sub.add_parser("gain", help="tokens saved by memory, + footprint and tuning")
+    gn.add_argument("--history", action="store_true", help="recent pulls, one per line")
+    gn.add_argument("--reset", action="store_true", help="clear the savings ledger")
+    gn.add_argument("--max-items", type=int, help="max memories injected per prompt")
+    gn.add_argument("--budget", type=int, help="max chars of the injected block")
+    sub.add_parser("branches", help="git topology + per-branch memory")
+
+    # -- merges / conflicts ---------------------------------------------------
+    sub.add_parser("conflicts", help="memories that contradict after a branch merge")
+    rs = sub.add_parser("resolve", help="settle a conflict")
+    rs.add_argument("id")
+    rs.add_argument("--keep", action="store_true", help="this memory wins (default)")
+    rs.add_argument("--both", action="store_true", help="keep both; just clear the flag")
+    hs = sub.add_parser("history", help="supersession lineage of a memory")
+    hs.add_argument("id")
+
+    # -- team / portability ---------------------------------------------------
+    sh = sub.add_parser("share", help="write your committed per-author memory shard")
+    sh.add_argument("--status", action="store_true",
+                    help="who contributed what, instead of writing a shard")
+    sub.add_parser("sync", help="pull teammates' shared memory")
+    sn = sub.add_parser("snapshot", help="portable JSON memory, in or out")
+    sn.add_argument("--out", nargs="?", const="", metavar="FILE",
+                    help="write a snapshot (default: ./omni-memory.json)")
+    sn.add_argument("--in", dest="in_file", nargs="?", const="", metavar="FILE",
+                    help="load a snapshot (default: ./omni-memory.json)")
+    sn.add_argument("--global", dest="glob", action="store_true",
+                    help="the shared ~/.omni-memory store")
+
+    # -- machine entrypoint (hidden: the IDE calls this, not you) -------------
+    # The event names are a contract: `install._hooks_block()` and the published
+    # plugin's hooks.json reference them as strings. Renaming one silently unwires
+    # every already-installed integration.
+    # (no `help=` — argparse lists only subparsers that declare one, and
+    # `help=SUPPRESS` renders literally as "==SUPPRESS==" on Python 3.9.)
+    hk = sub.add_parser("hook")
+    hk.add_argument("event",
+                    choices=["start", "inject", "capture", "precompact", "read"])
 
     args = p.parse_args(argv)
     dispatch = {
-        None: cmd_status, "status": cmd_status, "on": cmd_toggle, "off": cmd_toggle,
-        "branch-aware": cmd_branch_aware, "remember": cmd_remember, "capture": cmd_capture,
-        "inject": cmd_inject, "inject-mode": cmd_inject_mode,
-        "recall": cmd_recall, "branches": cmd_branches,
-        "forget": cmd_forget, "used": cmd_used, "gc": cmd_gc, "restore": cmd_restore,
-        "lock": cmd_lock, "unlock": cmd_lock,
+        None: cmd_status, "status": cmd_status, "doctor": cmd_doctor,
+        "config": cmd_config, "on": cmd_toggle, "off": cmd_toggle,
+        "bind": cmd_bind, "key": cmd_key,
+        "remember": cmd_remember, "recall": cmd_recall, "inject": cmd_inject,
+        "used": cmd_used, "forget": cmd_forget, "lock": cmd_lock,
+        "build": cmd_build, "check": cmd_check, "capture": cmd_capture,
+        "gc": cmd_gc, "flush": cmd_flush,
+        "systemmap": cmd_systemmap, "ui": cmd_ui, "gain": cmd_gain,
+        "branches": cmd_branches,
         "conflicts": cmd_conflicts, "resolve": cmd_resolve, "history": cmd_history,
-        "share": cmd_share, "sync": cmd_sync, "team": cmd_team,
-        "map": cmd_map, "check": cmd_check, "digest": cmd_digest,
-        "build": cmd_build, "prompt": cmd_prompt, "artifact": cmd_artifact,
-        "key": cmd_key, "hook": cmd_hook, "ui": cmd_ui, "install": cmd_install,
-        "flush": cmd_flush, "bind": cmd_bind, "doctor": cmd_doctor,
-        "usage": cmd_usage, "export": cmd_export, "import": cmd_import,
+        "share": cmd_share, "sync": cmd_sync, "snapshot": cmd_snapshot,
+        "hook": cmd_hook,
     }
     return dispatch[args.cmd](args)
 

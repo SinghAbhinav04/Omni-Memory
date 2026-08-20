@@ -49,6 +49,42 @@
     margin-right:6px;color:var(--fg-2);font-size:10px;font-family:var(--mono)}
   svg{width:100%;height:calc(100vh - 54px);display:block}
   text{font:10px var(--mono);fill:var(--graph-text)}
+
+  /* Everything between the SM-CSS sentinels is lifted verbatim into the standalone
+     artifact by `omni-memory systemmap`. Keep the sentinels on their own lines — the
+     extractor slices between them, so text sharing a line with one lands in the output. */
+  /* SM-CSS:START */
+  /* ── System Map: isometric city, hand-rolled SVG (no d3 — works offline) ── */
+  #sm{height:calc(100vh - 190px);touch-action:none;background:transparent}
+  #sm [data-node]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .smbar{display:flex;align-items:center;gap:9px;padding:10px 24px;flex-wrap:wrap;
+    border-bottom:1px solid var(--border);background:var(--panel)}
+  .smsnap{font-family:var(--mono);font-size:11px;color:var(--fg-2)}
+  .smsel{background:var(--panel-2);border:1px solid var(--border-2);color:var(--fg);
+    border-radius:7px;padding:5px 9px;font:inherit;font-size:12px;max-width:320px}
+  .smbtn{background:var(--panel-2);border:1px solid var(--border-2);color:var(--fg);
+    border-radius:7px;padding:5px 11px;font:inherit;font-size:12px;cursor:pointer}
+  .smbtn:hover:not(:disabled){border-color:var(--accent);color:var(--accent-2)}
+  .smbtn:disabled{opacity:.42;cursor:default}
+  .smlegend{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:9px 24px;
+    border-bottom:1px solid var(--border);font-size:11px;color:var(--fg-2)}
+  .smtog{display:inline-flex;align-items:center;gap:6px;background:none;border:1px solid transparent;
+    border-radius:7px;padding:3px 8px;color:var(--fg-2);font:inherit;font-size:11px;cursor:pointer}
+  .smtog:hover{border-color:var(--border-2)}
+  .smtog.off{opacity:.4;text-decoration:line-through}
+  .smsw{width:22px;border-top-width:2.5px;display:inline-block}
+  .smsep{width:1px;height:15px;background:var(--border-2);margin:0 4px}
+  .smkey{display:inline-flex;align-items:center;gap:5px;cursor:help}
+  .smdot{width:9px;height:9px;border-radius:2px;display:inline-block}
+  .smstep{padding:10px 24px;border-top:1px solid var(--border);background:var(--panel);
+    font-size:12px;color:var(--fg-2);font-family:var(--mono);min-height:38px}
+  .smrow{padding:5px 0;border-bottom:1px solid var(--border);font-size:12px;color:var(--fg-2)}
+  .smrow:last-child{border-bottom:none}
+  @media (max-width:900px){ #sm{height:52vh} .smbar,.smlegend,.smstep{padding-left:14px;padding-right:14px} }
+  /* The map is static unless a flow is stepped, so there is no looping motion to stop;
+     this keeps any transition we add later honest under a reduced-motion preference. */
+  @media (prefers-reduced-motion:reduce){ #sm *{transition:none!important;animation:none!important} }
+  /* SM-CSS:END */
   .brow{border:1px solid var(--border);border-radius:11px;padding:10px 14px;margin-bottom:8px;
     background:var(--panel);display:flex;justify-content:space-between;gap:12px;box-shadow:0 1px 2px var(--shadow)}
   .brow b{color:var(--fg)}
@@ -149,6 +185,7 @@
     <a data-tab="graph">Memory Graph</a>
     <a data-tab="code">Code Graph</a>
     <a data-tab="health">Health Map</a>
+    <a data-tab="system">System Map</a>
     <a data-tab="conflicts">Conflicts</a>
     <a data-tab="branches">Repo Graph</a>
     <a id="flushbtn" title="Wipe stored memory/graph so it can be rebuilt from scratch">Flush</a>
@@ -248,6 +285,7 @@ async function render(tab){
     if(tab==='graph') return await renderGraph();
     if(tab==='code') return await renderCode();
     if(tab==='health') return await renderHealth();
+    if(tab==='system') return await renderSystem();
     if(tab==='conflicts') return await renderConflicts();
     if(tab==='branches') return await renderBranches();
   } catch(e){
@@ -257,14 +295,37 @@ async function render(tab){
   }
 }
 
+// Compact token counts, mirroring savings.human() so the dashboard and the CLI never
+// disagree about the same number.
+function smTok(n){
+  if(n >= 1e6) return (n/1e6).toFixed(1)+'M';
+  if(n >= 1e3) return (n/1e3).toFixed(1)+'k';
+  return ''+(n||0);
+}
+
 async function renderOverview(){
   const o = await api('/api/overview');
+  let g = null;
+  try { g = await api('/api/gain'); } catch(e){ /* ledger is optional */ }
   hdr.textContent = 'project memory health';
   const m=o.memories, c=o.code, b=o.branches;
   const tile=(n,label,accent)=>`<div class="s" style="min-width:96px${accent?';border-color:'+accent:''}"><b${accent?' style="color:'+accent+'"':''}>${n}</b><span>${label}</span></div>`;
   const kinds=Object.entries(o.kinds||{}); const maxk=Math.max(1,...kinds.map(([,n])=>n));
+  // Savings first: it answers "is this worth it", which is the question someone opens
+  // the dashboard with. `method` rides along as a title so the figure stays checkable.
+  const gainBlock = (g && g.pulls) ? `
+    <div class="sec" style="color:#7c7c82;margin:2px 0 8px">Tokens saved
+      <span class="hint" title="${esc(g.method)}" style="cursor:help">(how?)</span></div>
+    <div class="stat">
+      ${tile(smTok(g.saved),'saved','#4f8f60')}${tile(g.pct+'%','vs re-reading')}
+      ${tile(smTok(g.served),'served')}${tile(g.pulls,'pulls')}</div>
+    <div class="hint" style="margin:6px 0 0">${esc(g.method)}</div>`
+    : `<div class="sec" style="color:#7c7c82;margin:2px 0 8px">Tokens saved</div>
+       <div class="hint">No pulls recorded yet — savings are measured as memory is used.
+       Run <code>omni-memory inject "&lt;question&gt;"</code> or start a session.</div>`;
   view.innerHTML = `
-    <div class="sec" style="color:#7c7c82;margin:2px 0 8px">Memory</div>
+    ${gainBlock}
+    <div class="sec" style="color:#7c7c82;margin:18px 0 8px">Memory</div>
     <div class="stat">${tile(m.active,'active')}${tile(m.stale,'stale',m.stale?'#4a3418':'')}${tile(m.merged,'merged')}${tile(m.superseded,'superseded')}</div>
     <div class="sec" style="color:#7c7c82;margin:18px 0 8px">Code graph & branches</div>
     <div class="stat">${tile(c.symbols,'symbols')}${tile(c.edges,'edges')}${tile(c.files,'files')}${tile(b.total,'branches')}</div>
@@ -321,7 +382,7 @@ async function renderDocs(){
   nav.querySelectorAll('[data-doc]').forEach(c=>{ if(docs.find(d=>d.name===c.dataset.doc&&d.exists)) c.onclick=()=>show(c.dataset.doc); });
   document.getElementById('docedit').onclick = ()=>{ if(current) show(current, !editing); };
   const first = docs.find(d=>d.exists);
-  if(first) show(first.name); else document.getElementById('docbody').innerHTML='<span class="hint">No docs yet — run <code>omni-memory build</code> (with a model key) or <code>omni-memory artifact all</code>.</span>';
+  if(first) show(first.name); else document.getElementById('docbody').innerHTML='<span class="hint">No docs yet — run <code>omni-memory build</code> (with a model key) or <code>omni-memory build</code>.</span>';
 }
 
 async function renderMemory(){
@@ -403,7 +464,7 @@ async function renderGraph(){
   const links = g.edges.filter(e=>ids.has(e.from)&&ids.has(e.to))
                        .map(e=>({source:e.from,target:e.to,rel:e.rel}));
   hdr.textContent = nodes.length + ' nodes · ' + links.length + ' links · scroll to zoom, drag nodes, hover to focus';
-  if(!nodes.length){ view.innerHTML='<span class="hint">graph is empty — run <code>omni-memory build</code> or <code>omni-memory map</code>.</span>'; return; }
+  if(!nodes.length){ view.innerHTML='<span class="hint">graph is empty — run <code>omni-memory build</code> or <code>omni-memory check --graph</code>.</span>'; return; }
   view.innerHTML = '<svg id="g"></svg>';
 
   const svg = d3.select('#g'), gg = svg.append('g');
@@ -534,7 +595,7 @@ async function renderCode(){
   catch(e){ view.innerHTML='<span class="hint">code graph API failed: '+esc(e.message)+'</span>'; return; }
   const syms = g.nodes.filter(n=>n.kind!=='file');           // symbols carry the signal
   hdr.textContent = syms.length+' symbols · '+g.edges.length+' edges · click a node for its dossier';
-  if(!syms.length){ view.innerHTML='<span class="hint">no code graph yet.<br>• Build it: <code>omni-memory build</code> (or <code>omni-memory map</code>).<br>• For <b>non-Python</b> repos (JS/TS/Go/…) the deep graph needs tree-sitter — check <code>omni-memory doctor</code>; if it says “tree-sitter: absent”, install on Python ≥3.10: <code>pip install -U omni-memory-agent</code>.</span>'; return; }
+  if(!syms.length){ view.innerHTML='<span class="hint">no code graph yet.<br>• Build it: <code>omni-memory build</code> (or <code>omni-memory check --graph</code>).<br>• For <b>non-Python</b> repos (JS/TS/Go/…) the deep graph needs tree-sitter — check <code>omni-memory doctor</code>; if it says “tree-sitter: absent”, install on Python ≥3.10: <code>pip install -U omni-memory-agent</code>.</span>'; return; }
   view.innerHTML = '<svg id="cg"></svg>';
   const ids = new Set(g.nodes.map(n=>n.id));
   const nodes = g.nodes.map(d=>({...d}));
@@ -719,6 +780,399 @@ function openHealthPanel(d, list){
     activeTab='memory'; document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on'));
     document.querySelector('nav a[data-tab="memory"]').classList.add('on'); render('memory'); });
 }
+
+// Everything between the SM-JS sentinels is lifted verbatim into the standalone artifact
+// by `omni-memory systemmap` (which supplies its own api/isDark/esc/view/insp shims), so
+// the dashboard and the shareable file render from ONE copy of this code. Keep the
+// sentinels on their own lines — the extractor slices between them.
+// SM-JS:START
+// ══════════════════ System Map — the implemented architecture, with its decay ══════
+// Hand-rolled isometric SVG: no d3, no CDN. The map therefore works offline and the
+// standalone artifact is genuinely self-contained (their spec forbids a dependency for
+// the isometric effect, which happens to match our zero-dependency design rule).
+//
+// What no generated architecture diagram can do: every building carries a verdict
+// re-resolved from the git blob sha its memory was captured against, so a source that
+// moved renders as visibly degraded instead of quietly staying confident.
+const SM_NS = 'http://www.w3.org/2000/svg';
+function sEl(tag, attrs, text){
+  const e = document.createElementNS(SM_NS, tag);
+  for(const k in attrs) if(attrs[k]!=null) e.setAttribute(k, attrs[k]);
+  if(text!=null) e.textContent = text;   // never innerHTML — memory text is teammate-controlled
+  return e;
+}
+function shade(hex, f){
+  const n = parseInt(hex.slice(1),16);
+  const c = [n>>16&255, n>>8&255, n&255].map(v=>Math.max(0,Math.min(255,Math.round(v*f))));
+  return '#'+c.map(v=>v.toString(16).padStart(2,'0')).join('');
+}
+function SMC(){ return isDark()
+  ? {FRESH:'#6fae7c', DRIFTED:'#d9a441', ORPHANED:'#cf6a55', UNVERIFIABLE:'#8a7551',
+     BLIND:'#4d3e22', ground:'#2f2615', text:'#eaddc2', dim:'#8a7551'}
+  : {FRESH:'#4f8f60', DRIFTED:'#c1841f', ORPHANED:'#b1503c', UNVERIFIABLE:'#a48c66',
+     BLIND:'#d6c29c', ground:'#eddfc7', text:'#3a2c18', dim:'#a48c66'}; }
+const SM_EDGE = {control:{c:'#8a5412', dash:'',    verb:'control'},
+                 data:   {c:'#2f7f9f', dash:'7 5', verb:'data'},
+                 event:  {c:'#8a5bb0', dash:'2 4', verb:'event'}};
+const SM_VERDICT_HELP = {
+  FRESH:'the cited bytes still hash to what the memory was derived from',
+  DRIFTED:'the source changed after capture — re-derive the claim',
+  ORPHANED:'the source is gone — drop the memory or re-source it',
+  UNVERIFIABLE:'legacy memory with no content key — counted, never claimed fresh',
+  BLIND:'no memory anchored here — an un-mapped region of the system'};
+// zone bands, front (entry) to back (state)
+const SM_ZONES = ['entry','application','async','state'];
+const TW = 120, TH = 60;                        // 2:1 isometric tile
+
+let SM = null;                                   // live map state for the tab
+
+async function renderSystem(){
+  let m;
+  try { m = await api('/api/systemmap'); }
+  catch(e){ view.innerHTML='<span class="hint">system map API failed: '+esc(e.message)+'</span>'; return; }
+  if(!m.nodes.length){
+    view.innerHTML='<span class="hint">nothing to map yet — build the code graph with '
+      +'<code>omni-memory check --graph</code>, then capture or <code>omni-memory build</code> memory.</span>';
+    return; }
+  const r = m.repository, st = m.stats;
+  hdr.textContent = `${st.buildings} buildings · ${st.routes} routes · ${st.flows} flows · `
+    + `${st.memories} memories` + (st.notBindable?` · ${st.notBindable} not bindable`:'')
+    + ` · branch ${r.branch} @ ${r.commitShort||'—'}`;
+
+  // ── layout: each zone is an isometric platform; zones stack front-to-back ──
+  //
+  // On an isometric grid, stepping (+1,-1) moves level across the screen and (+1,+1)
+  // moves straight down it. Laying a band out along the first axis and stacking bands
+  // along the second collapses to plain screen coordinates — and, crucially, keeps the
+  // grid unsheared, so a zone's floor is a true rhombus that sits under its buildings
+  // instead of the leaning parallelogram a per-row offset produces.
+  const CSTEP = 1.25, SUBROW = 1.0, ZSTEP = 2.35, PER_ROW = 4;
+  const byZone = {}; SM_ZONES.forEach(z=>byZone[z]=[]);
+  m.nodes.forEach(n=>(byZone[n.zone]||byZone.application).push(n));
+  const placed = [], bands = [];
+  let B = 0;
+  SM_ZONES.forEach(z=>{
+    const list = byZone[z]; if(!list.length) return;
+    const rows = Math.ceil(list.length/PER_ROW);
+    const widest = Math.min(list.length, PER_ROW);
+    list.forEach((n,i)=>{
+      const rIdx = Math.floor(i/PER_ROW), inRow = i%PER_ROW;
+      const count = Math.min(PER_ROW, list.length - rIdx*PER_ROW);
+      const t = (inRow-(count-1)/2)*CSTEP;          // level across the band
+      placed.push({...n, zone:z, x:t*TW, y:(B + rIdx*SUBROW)*TH});
+    });
+    bands.push({zone:z, cx:0, cy:(B + (rows-1)*SUBROW/2)*TH,
+                halfW:((widest-1)/2*CSTEP + 0.8)*TW,
+                halfH:((rows-1)*SUBROW/2 + 0.8)*TH});
+    B += (rows-1)*SUBROW + ZSTEP;
+  });
+  // a real isometric floor tile: a rhombus, 2:1, centred on its band
+  const bandPts = b => [[b.cx+b.halfW,b.cy],[b.cx,b.cy+b.halfH],
+                        [b.cx-b.halfW,b.cy],[b.cx,b.cy-b.halfH]];
+  const pos = {}; placed.forEach(n=>{ pos[n.id]={x:n.x, y:n.y, n}; });
+  const hs = placed.map(n=>n.height||1), hmax = Math.max(...hs,1);
+  const hOf = n => 22 + Math.sqrt((n.height||1)/hmax)*58;
+
+  view.innerHTML = '';
+  // ── snapshot + flow picker ──
+  const top = document.createElement('div'); top.className='smbar';
+  const snap = document.createElement('span'); snap.className='smsnap';
+  snap.textContent = (r.url? r.url.replace(/^https:\/\/(www\.)?/,'') : 'local repo')
+    + ` · ${r.branch}` + (r.base?` (base ${r.base})`:'') + ` · ${r.commitShort||'no commit'}`;
+  top.appendChild(snap);
+  const fsel = document.createElement('select'); fsel.className='smsel';
+  fsel.setAttribute('aria-label','Choose an end-to-end flow to step through');
+  fsel.appendChild(new Option('— no flow selected —',''));
+  m.flows.forEach(f=>fsel.appendChild(new Option(f.label + (f.verdict!=='FRESH'?`  (${f.verdict})`:''), f.id)));
+  if(m.flows.length) top.appendChild(fsel);
+  const mkBtn = (label,title)=>{ const b=document.createElement('button');
+    b.className='smbtn'; b.textContent=label; b.title=title; b.type='button'; return b; };
+  const prev = mkBtn('‹ Prev','Previous step in the selected flow');
+  const next = mkBtn('Next ›','Next step in the selected flow');
+  prev.disabled = next.disabled = true;
+  if(m.flows.length){ top.appendChild(prev); top.appendChild(next); }
+  const spacer = document.createElement('span'); spacer.style.flex='1'; top.appendChild(spacer);
+  const zin=mkBtn('+','Zoom in'), zout=mkBtn('−','Zoom out'), zres=mkBtn('Reset','Reset the view');
+  [zin,zout,zres].forEach(b=>top.appendChild(b));
+  view.appendChild(top);
+
+  // ── legend: relationship kinds are toggles, verdicts are the decay key ──
+  const leg = document.createElement('div'); leg.className='smlegend';
+  const hidden = new Set();
+  Object.keys(SM_EDGE).forEach(k=>{
+    const b=document.createElement('button'); b.type='button'; b.className='smtog';
+    b.setAttribute('aria-pressed','true'); b.title='Show or hide '+k+' routes';
+    const sw=document.createElement('span'); sw.className='smsw';
+    sw.style.borderTopStyle = k==='control'?'solid':'dashed';
+    sw.style.borderTopColor = SM_EDGE[k].c;
+    b.appendChild(sw); b.appendChild(document.createTextNode(k));
+    b.onclick = ()=>{ hidden.has(k)?hidden.delete(k):hidden.add(k);
+      b.setAttribute('aria-pressed', String(!hidden.has(k)));
+      b.classList.toggle('off', hidden.has(k)); paint(); };
+    leg.appendChild(b);
+  });
+  const sep=document.createElement('span'); sep.className='smsep'; leg.appendChild(sep);
+  Object.keys(SM_VERDICT_HELP).forEach(v=>{
+    if(!(st.verdicts||{})[v] && v!=='FRESH') return;      // only show verdicts present
+    const s=document.createElement('span'); s.className='smkey'; s.title=SM_VERDICT_HELP[v];
+    const d=document.createElement('span'); d.className='smdot'; d.style.background=SMC()[v];
+    s.appendChild(d); s.appendChild(document.createTextNode(v.toLowerCase()));
+    leg.appendChild(s);
+  });
+  view.appendChild(leg);
+
+  const svg = sEl('svg',{id:'sm', role:'application', tabindex:'-1',
+    'aria-label':'Isometric system map of this repository. Buildings are runtime roles; '
+      +'routes are control, data and event paths. Select a building for its evidence.'});
+  const gg = sEl('g',{});
+  svg.appendChild(gg); view.appendChild(svg);
+  const step = document.createElement('div'); step.className='smstep';
+  step.setAttribute('aria-live','polite'); step.textContent =
+    m.flows.length ? 'Pick a flow above to step through it.'
+                   : 'No end-to-end flows recorded yet — capture a flow or endpoint memory written as A → B → C.';
+  view.appendChild(step);
+
+  // ── pan / zoom ──
+  let tx=0, ty=0, k=1;
+  function apply(){ gg.setAttribute('transform',`translate(${tx},${ty}) scale(${k})`); }
+  function fit(){
+    // Bound the real drawn extent — platforms out to the sides, the tallest roof
+    // above, labels below — otherwise the city sits off-centre in a field of nothing.
+    let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+    bands.forEach(b=>{ bandPts(b).forEach(([x,y])=>{
+      x0=Math.min(x0,x); x1=Math.max(x1,x); y0=Math.min(y0,y); y1=Math.max(y1,y); }); });
+    placed.forEach(n=>{ const p=pos[n.id];
+      y0=Math.min(y0, p.y-hOf(n)*1.3-TH/2); y1=Math.max(y1, p.y+TH/2+26); });
+    const W=svg.clientWidth||svg.getBoundingClientRect().width||960;
+    const H=svg.clientHeight||svg.getBoundingClientRect().height||540;
+    const pad=56, w=(x1-x0)||1, h=(y1-y0)||1;
+    k=Math.max(.2,Math.min(1.5,Math.min((W-pad*2)/w,(H-pad*2)/h)));
+    tx=W/2-k*(x0+x1)/2; ty=H/2-k*(y0+y1)/2; apply();
+  }
+  zin.onclick=()=>{k=Math.min(3,k*1.25);apply();};
+  zout.onclick=()=>{k=Math.max(.15,k/1.25);apply();};
+  zres.onclick=fit;
+  svg.addEventListener('wheel',e=>{ e.preventDefault();
+    k=Math.max(.15,Math.min(3,k*(e.deltaY<0?1.12:1/1.12))); apply(); },{passive:false});
+  let drag=null;
+  svg.addEventListener('pointerdown',e=>{ if(e.target.closest('[data-node]')) return;
+    drag={x:e.clientX,y:e.clientY,tx,ty}; svg.setPointerCapture(e.pointerId); });
+  svg.addEventListener('pointermove',e=>{ if(!drag) return;
+    tx=drag.tx+(e.clientX-drag.x); ty=drag.ty+(e.clientY-drag.y); apply(); });
+  svg.addEventListener('pointerup',()=>{ drag=null; });
+
+  // ── selection + flow state ──
+  let sel=null, flow=null, fi=-1;
+  fsel.onchange=()=>{ flow=m.flows.find(f=>f.id===fsel.value)||null; fi=flow?0:-1; syncFlow(); };
+  prev.onclick=()=>{ if(flow&&fi>0){fi--;syncFlow();} };
+  next.onclick=()=>{ if(flow&&fi<flow.steps.length-1){fi++;syncFlow();} };
+  function syncFlow(){
+    prev.disabled = !flow || fi<=0;
+    next.disabled = !flow || fi>=flow.steps.length-1;
+    if(!flow){ step.textContent='Pick a flow above to step through it.'; sel=null; paint(); return; }
+    const s=flow.steps[fi];
+    step.textContent = `Step ${fi+1} of ${flow.steps.length} — ${s.action}`
+      + (s.citation? `   ·   ${s.citation.path}:${s.citation.startLine}-${s.citation.endLine}` : '   ·   no citation for this step');
+    sel = s.nodeId || null; paint();
+    if(sel && pos[sel]) openSystemPanel(pos[sel].n, m);
+  }
+
+  // ── paint ─────────────────────────────────────────────────────────────────
+  function paint(){
+    while(gg.firstChild) gg.removeChild(gg.firstChild);
+    const C = SMC(), gnodes = {};
+    const defs = sEl('defs',{});
+    // hatch marks a DRIFTED building without hiding it — degraded, not deleted
+    const pat = sEl('pattern',{id:'smhatch', width:'6', height:'6',
+      patternUnits:'userSpaceOnUse', patternTransform:'rotate(45)'});
+    pat.appendChild(sEl('rect',{width:'6',height:'6',fill:'none'}));
+    pat.appendChild(sEl('line',{x1:'0',y1:'0',x2:'0',y2:'6',stroke:C.ORPHANED,
+      'stroke-width':'1.6','stroke-opacity':'.55'}));
+    defs.appendChild(pat);
+    Object.keys(SM_EDGE).forEach(kd=>{                 // one arrowhead per route colour
+      const mk = sEl('marker',{id:'smar-'+kd, viewBox:'0 0 10 10', refX:'9', refY:'5',
+        markerWidth:'6', markerHeight:'6', orient:'auto-start-reverse'});
+      mk.appendChild(sEl('path',{d:'M0,1 L10,5 L0,9 z', fill:SM_EDGE[kd].c}));
+      defs.appendChild(mk);
+    });
+    gg.appendChild(defs);
+
+    const adj = sel ? new Set(m.edges.filter(e=>e.from===sel||e.to===sel)
+                              .flatMap(e=>[e.from,e.to])) : null;
+
+    // ── ground: one platform per zone, so buildings stand on something and the
+    // entry → application → async → state progression is actually visible ──
+    bands.forEach(b=>{
+      const pts = bandPts(b).map(p=>p.join(',')).join(' ');
+      gg.appendChild(sEl('polygon',{points:pts, fill:C.ground, 'fill-opacity':'.55',
+        stroke:C.dim, 'stroke-opacity':'.35', 'stroke-width':'1'}));
+      // zone label sits OUTSIDE the platform's left vertex — inside, a building covers it
+      gg.appendChild(sEl('text',{x:b.cx-b.halfW-14, y:b.cy+4, fill:C.dim, 'text-anchor':'end',
+        style:'font-size:10px;letter-spacing:.16em;text-transform:uppercase;pointer-events:none'},
+        b.zone));
+    });
+
+    // routes next (buildings occlude them), skipping hidden kinds
+    m.edges.forEach(e=>{
+      if(hidden.has(e.kind) || !pos[e.from] || !pos[e.to]) return;
+      const a=pos[e.from], b=pos[e.to], sp=SM_EDGE[e.kind];
+      const on = !sel || e.from===sel || e.to===sel;
+      // stop short of the destination facade so the arrowhead lands in front of it
+      const dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1, back=Math.min(38,len*0.28);
+      const ex=b.x-dx/len*back, ey=b.y-dy/len*back;
+      const mx=(a.x+ex)/2, my=(a.y+ey)/2-30;      // lift the crossing so routes don't knot
+      const d=`M${a.x},${a.y} Q${mx},${my} ${ex},${ey}`;
+      const g = sEl('g',{'data-edge':e.id, style:'cursor:pointer',
+        opacity: on?1:.18});
+      // a pale casing under the line keeps it legible where it crosses a platform
+      g.appendChild(sEl('path',{d, fill:'none', stroke:C.ground,
+        'stroke-width': on?6:4, 'stroke-opacity':'.8', 'stroke-linecap':'round'}));
+      g.appendChild(sEl('path',{d, fill:'none', stroke:sp.c, 'stroke-width': on?2.6:1.8,
+        'stroke-dasharray':sp.dash||null, 'stroke-linecap':'round',
+        'marker-end':'url(#smar-'+e.kind+')'}));
+      g.appendChild(sEl('title',{}, `${e.from} —${e.verb}→ ${e.to}`));
+      g.addEventListener('click',ev=>{ ev.stopPropagation(); sel=null; paint(); openEdgePanel(e); });
+      gg.appendChild(g);
+    });
+
+    // buildings back-to-front so occlusion is predictable
+    // back-to-front: a nearer building (larger y) must draw over a farther one
+    placed.slice().sort((p,q)=>(p.y-q.y)||(p.x-q.x)).forEach(n=>{
+      const {x,y}=pos[n.id];
+      const vc = C[n.verdict]||C.dim;
+      const orph = n.verdict==='ORPHANED';
+      let h = hOf(n) * (orph?0.38:1) * (n.kind==='broker'?0.62:n.kind==='gateway'?1.28:1);
+      const s = n.kind==='broker'?0.94:n.kind==='gateway'?0.56:n.kind==='store'?0.7:0.78;
+      const hw=TW/2*s, hh=TH/2*s;
+      // dim unrelated buildings, never hide them — the spec's rule, and a hidden
+      // building would silently erase a part of the system from the reader's model
+      const dim = adj && !adj.has(n.id) && n.id!==sel;
+      const g = sEl('g',{'data-node':n.id, tabindex:'0', role:'button',
+        'aria-label':`${n.label}, ${n.kind}, ${n.verdict}`,
+        opacity: dim?0.48:1, style:'cursor:pointer'});
+
+      g.appendChild(sEl('ellipse',{cx:x, cy:y+4, rx:hw*1.05, ry:hh*0.85,
+        fill:C.ground, opacity:'.5'}));                       // contact shadow
+      if(n.verdict==='BLIND'){                                 // wireframe: nothing known here
+        g.appendChild(sEl('polygon',{points:`${x},${y-hh} ${x+hw},${y} ${x},${y+hh} ${x-hw},${y}`,
+          fill:'none', stroke:vc, 'stroke-width':'1.4', 'stroke-dasharray':'5 4'}));
+      } else {
+        const t=y-h;
+        // left + right faces, then the roof on top
+        g.appendChild(sEl('polygon',{points:`${x-hw},${t} ${x},${t+hh} ${x},${y+hh} ${x-hw},${y}`,
+          fill:shade(vc,.62), stroke:shade(vc,.45), 'stroke-width':'.8'}));
+        g.appendChild(sEl('polygon',{points:`${x},${t+hh} ${x+hw},${t} ${x+hw},${y} ${x},${y+hh}`,
+          fill:shade(vc,.82), stroke:shade(vc,.45), 'stroke-width':'.8'}));
+        const roof = `${x},${t-hh} ${x+hw},${t} ${x},${t+hh} ${x-hw},${t}`;
+        g.appendChild(sEl('polygon',{points:roof, fill:vc, stroke:shade(vc,.7), 'stroke-width':'.8'}));
+        if(n.verdict==='DRIFTED')                              // degraded, still legible
+          g.appendChild(sEl('polygon',{points:roof, fill:'url(#smhatch)', stroke:'none'}));
+        if(n.verdict==='UNVERIFIABLE')
+          g.appendChild(sEl('polygon',{points:roof, fill:'none', stroke:C.text,
+            'stroke-width':'1.2','stroke-dasharray':'2 3','stroke-opacity':'.6'}));
+        if(orph)                                               // a crack through the rubble
+          g.appendChild(sEl('path',{d:`M${x-hw*.6},${t+hh*.2} L${x-hw*.1},${t-hh*.3} L${x+hw*.3},${t+hh*.4}`,
+            fill:'none', stroke:shade(vc,.5), 'stroke-width':'1.8'}));
+        if(n.kind==='broker')                                  // loading bays
+          for(let i=1;i<4;i++) g.appendChild(sEl('line',{x1:x+hw*i/4, y1:t+hh*i/4+2,
+            x2:x+hw*i/4, y2:y+hh*i/4-2, stroke:shade(vc,.55),'stroke-width':'1'}));
+        if(n.kind==='store')                                   // vault: a banded cylinder
+          g.appendChild(sEl('ellipse',{cx:x, cy:t, rx:hw*.62, ry:hh*.62,
+            fill:'none', stroke:shade(vc,.6),'stroke-width':'1.2'}));
+        if(n.kind==='gateway')                                 // the gate itself
+          g.appendChild(sEl('rect',{x:x+hw*.2, y:y-h*.28, width:hw*.42, height:h*.24,
+            fill:shade(vc,.42), stroke:'none'}));
+      }
+      if(n.id===sel) g.appendChild(sEl('polygon',{
+        points:`${x},${y-hh-3} ${x+hw+3},${y} ${x},${y+hh+3} ${x-hw-3},${y}`,
+        fill:'none', stroke:C.text, 'stroke-width':'2','stroke-dasharray':'4 3'}));
+      // label on a pill, so a name never has to be read against a roof behind it
+      const txt = n.label.length>20 ? n.label.slice(0,19)+'…' : n.label;
+      const lw = txt.length*6.4+14;
+      g.appendChild(sEl('rect',{x:x-lw/2, y:y+hh+3, width:lw, height:17, rx:8,
+        fill:C.ground, 'fill-opacity':'.92', stroke:C.dim, 'stroke-opacity':'.35',
+        style:'pointer-events:none'}));
+      g.appendChild(sEl('text',{x, y:y+hh+15, 'text-anchor':'middle', fill:C.text,
+        style:'font-size:11px;font-weight:600;pointer-events:none'}, txt));
+      g.appendChild(sEl('title',{}, `${n.label} · ${n.kind} · ${n.verdict}\n`
+        + SM_VERDICT_HELP[n.verdict] + `\n${n.memCount} memor${n.memCount===1?'y':'ies'}`));
+      const pick = ()=>{ sel=n.id; paint(); openSystemPanel(n, m); };
+      g.addEventListener('click',ev=>{ ev.stopPropagation(); pick(); });
+      g.addEventListener('keydown',ev=>{ if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); pick(); } });
+      // Hover emphasis adjusts opacity in place. Repainting here would destroy the very
+      // element being hovered, so mouseleave would never fire and the map would stick.
+      g.addEventListener('mouseenter',()=>{ if(!sel) emphasize(n.id); });
+      g.addEventListener('mouseleave',()=>{ if(!sel) emphasize(null); });
+      gnodes[n.id]=g; gg.appendChild(g);
+    });
+
+    function emphasize(id){
+      const near = id ? new Set(m.edges.filter(e=>e.from===id||e.to===id)
+                                .flatMap(e=>[e.from,e.to]).concat([id])) : null;
+      for(const nid in gnodes)
+        gnodes[nid].setAttribute('opacity', !near || near.has(nid) ? 1 : 0.3);
+      gg.querySelectorAll('[data-edge]').forEach(el=>{
+        const [f,t] = el.getAttribute('data-edge').split('->');
+        el.setAttribute('opacity', !near || f===id || t===id ? 1 : 0.14);
+      });
+    }
+  }
+  SM = {paint, fit};
+  paint();
+  // fit AFTER layout — clientWidth/Height are 0 until the svg is measured, which is
+  // what left the city sitting off-centre in a field of nothing.
+  requestAnimationFrame(()=>{ fit(); requestAnimationFrame(fit); });
+  addEventListener('resize', ()=>{ if(activeTab==='system') fit(); }, {once:false});
+}
+
+function openSystemPanel(n, m){
+  insp.classList.add('open');
+  const C = SMC(), vc = C[n.verdict]||C.dim;
+  const ins = m.edges.filter(e=>e.to===n.id), outs = m.edges.filter(e=>e.from===n.id);
+  const route = e => `<div class="smrow"><span class="chip" style="border-color:${SM_EDGE[e.kind].c}">${esc(e.kind)}</span>`
+    + `${esc(e.from)} <b>${esc(e.verb)}</b> ${esc(e.to)}</div>`;
+  const cites = (n.citations||[]).map(c=>{
+    const label = `${c.path}:${c.startLine}-${c.endLine}`;
+    const link = c.permalink ? `<a href="${esc(c.permalink)}" target="_blank" rel="noopener"
+        style="color:var(--accent-2);text-decoration:none">${esc(label)} ↗</a>`
+      : `<span style="font-family:var(--mono)">${esc(label)}</span>`;
+    return `<div class="smrow">${link}<div class="hint" style="margin-top:2px">${esc(c.proves)}</div></div>`;
+  }).join('') || '<div class="hint">No citations — nothing here rests on verifiable evidence yet.</div>';
+  insp.innerHTML = `<div class="ipanel">
+    <div class="ihead"><b>${esc(n.label)}</b><span class="iclose">✕</span></div>
+    <div class="irow" style="gap:8px;flex-wrap:wrap">
+      <span class="chip">${esc(n.kind)}</span><span class="chip">${esc(n.zone)}</span>
+      <span class="chip" style="border-color:${vc};color:${vc}">${esc(n.verdict)}</span>
+      <span class="chip">confidence: ${esc(n.confidence)}</span></div>
+    <p style="color:var(--fg-2);margin:10px 0 4px">${esc(n.plainRole)}</p>
+    <div class="sec">In this repository</div>
+    <p style="color:var(--fg)">${esc(n.repoRole)}</p>
+    <div class="sec">Provenance</div>
+    <p class="hint">${esc(SM_VERDICT_HELP[n.verdict]||'')}</p>
+    <div class="sec">What enters and leaves</div>
+    ${ins.map(route).join('')||'<div class="hint">nothing recorded entering</div>'}
+    ${outs.map(route).join('')||'<div class="hint">nothing recorded leaving</div>'}
+    <div class="sec">Evidence</div>${cites}
+  </div>`;
+  insp.querySelector('.iclose').onclick = closeInspector;
+}
+
+function openEdgePanel(e){
+  insp.classList.add('open');
+  const sp = SM_EDGE[e.kind];
+  insp.innerHTML = `<div class="ipanel">
+    <div class="ihead"><b>${esc(e.from)} → ${esc(e.to)}</b><span class="iclose">✕</span></div>
+    <div class="irow" style="gap:8px"><span class="chip" style="border-color:${sp.c}">${esc(e.kind)}</span>
+      <span class="chip">${esc(e.verb)}</span><span class="chip">confidence: ${esc(e.confidence)}</span></div>
+    <p style="color:var(--fg);margin-top:10px">${esc(e.explanation)}</p>
+    <div class="sec">Why this boundary exists</div>
+    <p class="hint">A dependency only means something once you name what crosses it — this
+      route is drawn from resolved call edges in the code graph, not from an import list.</p>
+  </div>`;
+  insp.querySelector('.iclose').onclick = closeInspector;
+}
+
+// SM-JS:END
 
 // ── Inspector: the readable node dossier ──
 const insp = document.getElementById('insp');

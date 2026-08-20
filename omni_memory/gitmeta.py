@@ -59,13 +59,20 @@ def blob_sha(root: Path, path: str) -> str:
 def blob_shas(root: Path, paths) -> dict:
     """{path: observed-content id} for the existing files among `paths` — the digest
     of the working-tree bytes the agent saw at capture (see `blob_sha`), so staleness
-    is verified against the actual observation, including uncommitted work."""
-    out = {}
-    for p in paths or []:
-        sha = blob_sha(root, p)
-        if sha:
-            out[p] = sha
-    return out
+    is verified against the actual observation, including uncommitted work.
+
+    Hashes in ONE `git hash-object` call rather than one per path. This rides the
+    injection hot path (every pull pins what it is trusted on), where a subprocess per
+    file was ~13x slower and made a large pull visibly stall.
+    """
+    live = [p for p in (paths or []) if (root / p).is_file()]
+    if not live:
+        return {}
+    out = _git(root, "hash-object", "--", *live).splitlines()
+    if len(out) != len(live):                 # partial/failed batch → fall back per-path
+        return {p: s for p in live if (s := blob_sha(root, p))}
+    return {p: sha for p, sha in zip(live, out)
+            if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha)}
 
 
 def default_branch(root: Path) -> str:

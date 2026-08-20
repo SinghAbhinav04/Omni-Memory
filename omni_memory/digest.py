@@ -47,7 +47,7 @@ def write_digest(store: Store) -> Path:
     for branch in sorted(by_branch, key=lambda b: (b != default, b)):
         merged = store.db.execute(
             "SELECT status FROM branches WHERE name=?", (branch,)).fetchone()
-        tag = f" _(merged)_" if merged and merged["status"] == "merged" else ""
+        tag = " _(merged)_" if merged and merged["status"] == "merged" else ""
         lines.append(f"## `{branch}`{tag}")
         for kind in _ORDER:
             items = by_branch[branch].get(kind)
@@ -56,7 +56,10 @@ def write_digest(store: Store) -> Path:
             lines.append(f"\n### {_HEADINGS.get(kind, kind.title())}")
             for m in items:
                 where = f"  — `{'`, `'.join(m['files'][:3])}`" if m["files"] else ""
-                flag = " _(inferred)_" if m.get("source") == "inferred" else ""
+                # `inferred` is an EVIDENCE tier, not a source (source is
+                # manual/session/doc/heuristic/imported/…), so comparing it against
+                # `source` could never be true and the marker never rendered.
+                flag = " _(inferred)_" if m.get("evidence") == "inferred" else ""
                 lines.append(f"- {m['text']}{flag}  `[{m['id']}]`{where}")
         lines.append("")
     text = "\n".join(lines)
