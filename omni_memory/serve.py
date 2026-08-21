@@ -185,6 +185,8 @@ def _handler(root: Path):
             if u.path == "/api/gain":
                 from . import savings
                 return self._send(200, json.dumps(savings.summary(store), default=str))
+            if u.path == "/api/integrity":
+                return self._send(200, json.dumps(_integrity(store, root), default=str))
             if u.path == "/api/conflicts":
                 return self._send(200, json.dumps({"conflicts": store.open_conflicts()}))
             if u.path == "/api/history":
@@ -211,6 +213,42 @@ def _handler(root: Path):
             return self._send(404, json.dumps({"error": "not found"}))
 
     return H
+
+
+def _integrity(store: Store, root: Path) -> dict:
+    """Everything `doctor` measures, as data instead of prose.
+
+    The trust story is the product, and until now it only existed in a terminal. Each
+    block is independently degradable: one of these failing must not blank the panel that
+    would have told you why, so every probe is guarded on its own and reports its own
+    absence rather than being dropped from the payload.
+    """
+    out: dict = {}
+    try:
+        from . import staleness
+        out["provenance"] = staleness.reconcile(store, root)
+    except Exception as e:  # noqa: BLE001
+        out["provenance"] = {"error": str(e)}
+    try:
+        from . import collector
+        out["collector"] = collector.liveness(store, root)
+    except Exception as e:  # noqa: BLE001
+        out["collector"] = {"error": str(e)}
+    try:
+        from . import identifier
+        out["identifier"] = identifier.identifier_contract(store)
+        # The loss curve is a chart, not a report line — which is exactly why it belongs
+        # here and not in `doctor`. On a variable-length population the cliff is one
+        # point on it, and the shape to its left is the part a single number drops.
+        for p in out["identifier"].get("populations", []):
+            sql = {"memory.id": "SELECT id FROM memory",
+                   "code_nodes.id": "SELECT id FROM code_nodes"}.get(p["population"])
+            if sql:
+                p["loss_curve"] = identifier.loss_curve(
+                    [r["id"] for r in store.db.execute(sql) if r["id"]])
+    except Exception as e:  # noqa: BLE001
+        out["identifier"] = {"error": str(e)}
+    return out
 
 
 def _sync_docs(store: Store, root: Path) -> None:

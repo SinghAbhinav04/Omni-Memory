@@ -158,6 +158,23 @@
   .stat{display:flex;gap:14px;margin-bottom:16px;flex-wrap:wrap}
   .stat .s{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:10px 16px;min-width:82px;box-shadow:0 1px 2px var(--shadow)}
   .stat .s b{display:block;font-size:21px;color:var(--fg);font-weight:650}.stat .s span{font-size:10px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.06em}
+  /* ── Integrity: the trust story, which until now only existed in a terminal ── */
+  .chk{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--border);
+    border-radius:11px;padding:11px 14px;margin-bottom:9px;background:var(--panel);
+    box-shadow:0 1px 2px var(--shadow)}
+  .chk .dot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:5px}
+  .chk .dot.ok{background:#4f8f60}.chk .dot.warn{background:#b5791b}
+  .chk .dot.bad{background:#c1522f}.chk .dot.na{background:var(--border-2)}
+  .chk h4{margin:0 0 2px;font-size:12.5px;font-weight:650;color:var(--fg)}
+  .chk p{margin:0;color:var(--fg-2);font-size:12px}
+  .chk .fix{margin-top:5px;color:var(--fg-3);font-size:11px;font-family:var(--mono)}
+  .bar{height:7px;border-radius:4px;background:var(--panel-2);overflow:hidden;margin:5px 0 2px}
+  .bar i{display:block;height:100%;background:var(--accent)}
+  .cliff{border:1px solid var(--border);border-radius:11px;padding:13px 15px;
+    margin-bottom:11px;background:var(--panel);box-shadow:0 1px 2px var(--shadow)}
+  .cliff .why{margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--panel-2);
+    color:var(--fg-2);font-size:11.5px;border-left:2px solid var(--accent)}
+  .cliff svg{width:100%;height:120px}
   .btn{background:var(--accent);border:1px solid var(--accent);color:#fff;border-radius:8px;
     padding:8px 14px;font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
   .btn:hover{filter:brightness(1.06)}
@@ -180,6 +197,7 @@
     <h1>◇ OmniMemory</h1>
     <input id="gsearch" placeholder="Search everything…" autocomplete="off">
     <a data-tab="overview" class="on">Overview</a>
+    <a data-tab="integrity">Integrity</a>
     <a data-tab="memory">Memory</a>
     <a data-tab="docs">Docs</a>
     <a data-tab="graph">Memory Graph</a>
@@ -280,6 +298,7 @@ async function render(tab){
   try {
     closeInspector();
     if(tab==='overview') return await renderOverview();
+    if(tab==='integrity') return await renderIntegrity();
     if(tab==='memory') return await renderMemory();
     if(tab==='docs') return await renderDocs();
     if(tab==='graph') return await renderGraph();
@@ -342,6 +361,137 @@ async function renderOverview(){
   if(m.stale) hdr.textContent += `  ·  ⚠ ${m.stale} stale`;
   const byId={}; (o.top_cited||[]).forEach(t=>byId[t.id]=t);
   view.querySelectorAll('[data-mem]').forEach(el=>el.onclick=()=>openMemoryInspector(byId[el.dataset.mem]));
+}
+
+// ── Integrity ───────────────────────────────────────────────────────────────
+// Everything `doctor` measures, rendered. Two rules the CLI already follows and the
+// panel must not break: a coverage figure is never shown without its denominator, and a
+// check that could not run says so instead of rendering green.
+
+function chk(state, title, body, fix){
+  const cls = state===true?'ok':state===false?'bad':state===null?'na':'warn';
+  return `<div class="chk"><span class="dot ${cls}"></span><div style="flex:1;min-width:0">
+    <h4>${esc(title)}</h4><p>${body}</p>
+    ${fix?`<div class="fix">→ ${esc(fix)}</div>`:''}</div></div>`;
+}
+function pctBar(n, d, label){
+  const p = d ? Math.round(n/d*100) : 0;
+  // The denominator rides along with the percentage, always. `0%` over a denominator of
+  // four is a different fact from `0%` over four hundred, and a bare bar hides which.
+  return `<div style="margin:7px 0 3px"><div style="display:flex;font-size:11px;color:var(--fg-2)">
+      <span>${esc(label)}</span><b style="margin-left:auto">${p}% <span class="hint">(${n}/${d})</span></b></div>
+    <div class="bar"><i style="width:${p}%"></i></div></div>`;
+}
+
+/** Loss curve: keys destroyed at each fold length, with the cliff marked.
+ *  Hand-rolled SVG rather than d3, so it renders with the CDN blocked — and because it
+ *  is the point the thread kept making: on a variable-length population the cliff is one
+ *  point on this curve, and the shape to its left is what a single number throws away. */
+function lossCurve(curve, cliff){
+  if(!curve || curve.length < 2) return '';
+  const W=520, H=120, PL=34, PR=10, PT=10, PB=20;
+  const maxL = curve[curve.length-1].length, maxLost = Math.max(1, ...curve.map(p=>p.keys_lost));
+  const X = L => PL + (L/maxL)*(W-PL-PR), Y = v => H-PB - (v/maxLost)*(H-PT-PB);
+  const pts = curve.map(p=>`${X(p.length).toFixed(1)},${Y(p.keys_lost).toFixed(1)}`).join(' ');
+  const area = `${PL},${H-PB} ${pts} ${X(maxL).toFixed(1)},${H-PB}`;
+  const mark = cliff ? `<line x1="${X(cliff).toFixed(1)}" y1="${PT}" x2="${X(cliff).toFixed(1)}"
+      y2="${H-PB}" stroke="#c1522f" stroke-width="1.2" stroke-dasharray="3 3"></line>
+    <text x="${(X(cliff)+4).toFixed(1)}" y="${PT+9}" style="fill:#c1522f">cliff ${cliff}</text>` : '';
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+      aria-label="keys lost at each fold length">
+    <polygon points="${area}" fill="var(--accent)" opacity=".16"></polygon>
+    <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.6"></polyline>
+    ${mark}
+    <line x1="${PL}" y1="${H-PB}" x2="${W-PR}" y2="${H-PB}" stroke="var(--border-2)"></line>
+    <text x="2" y="${PT+8}">${maxLost}</text><text x="2" y="${H-PB}">0</text>
+    <text x="${PL}" y="${H-6}">1 char</text>
+    <text x="${W-PR}" y="${H-6}" text-anchor="end">${maxL} chars</text></svg>
+  <div class="hint" style="font-size:11px">keys destroyed by truncating every key to N characters</div>`;
+}
+
+async function renderIntegrity(){
+  hdr.textContent = 'integrity · every number here is re-measured on load';
+  const d = await api('/api/integrity');
+  const P = d.provenance||{}, C = d.collector||{}, I = d.identifier||{};
+  let html = '<div class="sec" style="color:#7c7c82;margin:2px 0 9px">Can the memory be re-checked against the code?</div>';
+
+  if(P.error){ html += chk(null,'source integrity','could not be measured: '+esc(P.error)); }
+  else {
+    const clean = !(P.orphaned || P.uncheckable);
+    html += chk(clean?true:false, 'source integrity',
+      `${P.fresh||0} fresh · ${P.drifted||0} drifted · ${P.orphaned||0} orphaned · `
+      + `${P.uncheckable||0} unverifiable, of ${P.anchored||0} bindable memories`
+      + (P.not_bindable ? `<br><span class="hint">${P.not_bindable} not-bindable (no addressable source) — counted beside the denominator, never inside it</span>`:'')
+      + pctBar(Math.round((P.refetch_coverage||0)*(P.anchored||0)), P.anchored||0, 'verified re-fetchable')
+      + pctBar(Math.round((P.locator_coverage||0)*(P.anchored||0)), P.anchored||0, 'carry a content key'),
+      clean?'':'omni-memory gc  ·  re-capture legacy memory to add content keys');
+    const obs = P.observation_binding_coverage||0;
+    html += chk(P.unbound?false:(obs>0?true:'warn'), 'observation binding',
+      `${Math.round(obs*100)}% bound to bytes the agent actually READ; the rest are `
+      + `capture-time declarations — a weaker claim, kept apart on purpose`
+      + (P.unbound?`<br><b>⚠ ${P.unbound} UNBOUND_CAPTURE</b> — the source moved before capture`:''),
+      obs>0?'':'omni-memory bind — installs the read hook');
+  }
+
+  html += '<div class="sec" style="color:#7c7c82;margin:20px 0 9px">Did the instrument actually run?</div>';
+  if(C.error) html += chk(null,'collector liveness','could not be measured: '+esc(C.error));
+  else html += chk({OK:true,FAIL:false,SKIP:null}[C.verdict],
+    'collector ran (external witness)',
+    `<b>${esc(C.verdict||'?')}</b> — ${esc(C.why||'')}`
+    + `<br><span class="hint">checked against the runtime's own transcript, not against the `
+    + `ledger — a hook that never ran leaves an empty ledger that looks exactly like a quiet session</span>`,
+    C.verdict==='FAIL' ? C.remedy : '');
+
+  html += '<div class="sec" style="color:#7c7c82;margin:20px 0 9px">Identifier contract</div>';
+  if(I.error) html += chk(null,'identifier contract','could not be measured: '+esc(I.error));
+  else {
+    html += chk(!I.off_form_count, 'declared form',
+      `${I.keys} ids · <code>${esc(I.declared||'')}</code>`
+      + (I.off_form_count?`<br><b>⚠ ${I.off_form_count} off-form</b>: ${esc((I.off_form||[]).slice(0,4).join(', '))}`
+                        :'<br><span class="hint">all on form</span>'),
+      I.off_form_count?'off-form ids arrive via an imported team shard from another version':'');
+    html += chk(I.verdict==='COST_MEASURED'?false:null,
+      'fold cost — reported three-valued, never as a bare zero',
+      `<b>${esc((I.verdict||'').replace(/_/g,' ').toLowerCase())}</b> — ${esc(I.why||'')}`);
+
+    html += '<div class="sec" style="color:#7c7c82;margin:20px 0 9px">Key cliff — a property of the keys, not an estimate</div>';
+    (I.populations||[]).forEach(p=>{
+      const span = p.fixed_length ? `${p.key_length_max} chars, fixed`
+                                  : `${p.key_length_min}..${p.key_length_max} chars, variable`;
+      const dist = p.distance_to_cliff!==null && p.distance_to_cliff!==undefined
+        ? `<b>${p.distance_to_cliff}</b> chars of slack at the fold (${p.fold})`
+        : `distance <b>undefined</b> — ${esc(p.distance_why_not||'')}`;
+      // Silence has causes and they mean opposite things, so the panel says which one.
+      const reason = {
+        threshold_unreachable_at_fold:
+          `The at-scale verdict is <b>unreachable</b> on this shape of key: the threshold at
+           the first clean fold is ${p.threshold_at_first_clean_fold?Number(p.threshold_at_first_clean_fold).toExponential(2):'—'}
+           against ${p.keys} keys. A cliff warning gated on that verdict would be dead code
+           here — not quiet, unsatisfiable.`,
+        positions_saturated:
+          `The space estimate is the sample size in disguise (too few keys), so
+           &ldquo;safe at scale&rdquo; would be unearned.`,
+        no_fold_merges_these_keys:
+          `Nothing collides at any length — this one is genuinely clear.`
+      }[p.reason_empty];
+      html += `<div class="cliff">
+        <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+          <b style="font-family:var(--mono);font-size:13px">${esc(p.population)}</b>
+          <span class="chip">${p.keys} keys</span><span class="chip">${esc(span)}</span>
+          <span class="chip">${p.fold?('folded at '+p.fold):'never folded'}</span></div>
+        <p style="margin:7px 0 0;color:var(--fg-2)">
+          ${p.collides_at_length!==null
+            ? `Merges at <b>≤${p.collides_at_length}</b> characters, clean from ${p.first_clean_fold}. ${dist}.`
+            : 'No truncation merges these keys.'}
+          ${p.keys_shorter_than_cliff
+            ? `<br><span class="hint">${p.keys_shorter_than_cliff} of ${p.keys} keys are shorter than the cliff —
+               for them the fold is the identity, so this number describes the population's
+               right edge and not its shape.</span>` : ''}</p>
+        ${reason?`<div class="why">${reason}</div>`:''}
+        ${lossCurve(p.loss_curve, p.collides_at_length)}</div>`;
+    });
+  }
+  view.innerHTML = html;
 }
 
 let mermaidInit=false;

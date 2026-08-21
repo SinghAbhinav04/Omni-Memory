@@ -963,6 +963,26 @@ def cmd_bind(args):
     return install.bind(ide=args.ide or "auto")
 
 
+def _wired_events(settings: Path) -> set:
+    """Which hook events in this settings.json actually call OmniMemory.
+
+    Parsed, not grepped: the question is *which* events are wired, and a substring test
+    answers only "at least one", which is the same answer for a complete install and for
+    a three-year-old one missing half the integration.
+    """
+    try:
+        cfg = json.loads(settings.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:  # noqa: BLE001 — absent or hand-broken: nothing is wired
+        return set()
+    out = set()
+    for event, entries in (cfg.get("hooks") or {}).items():
+        for entry in entries or []:
+            for h in (entry or {}).get("hooks") or []:
+                if "omni_memory hook" in (h.get("command") or ""):
+                    out.add(event)
+    return out
+
+
 def _plugin_hooks_present() -> bool:
     """Are OmniMemory's hooks wired via the installed Claude Code plugin? The
     plugin ships its own hooks.json (SessionStart/UserPromptSubmit/SessionEnd),
@@ -1106,17 +1126,58 @@ def cmd_doctor(args):
             line(not ic["off_form_count"], "identifier contract", detail,
                  "off-form ids usually arrive via an imported/team shard from another "
                  "version — re-export it with a matching omni-memory")
+            # The cliff is a property of the keys, so it is printed for EVERY population
+            # the store keys on — including the one nothing folds. A verdict-gated
+            # warning is unsatisfiable on structured keys (the threshold at the first
+            # clean fold runs past 10^27), so silence there would mean "cannot fire",
+            # not "nothing found". When it is silent it says which.
+            for p in ic.get("populations", []):
+                cliff = p["collides_at_length"]
+                span = (f"{p['key_length_min']}..{p['key_length_max']} chars"
+                        if not p["fixed_length"] else f"{p['key_length_max']} chars")
+                if cliff is None:
+                    why = "no fold merges these keys"
+                else:
+                    why = (f"merges at ≤{cliff} chars, clean from {p['first_clean_fold']}"
+                           + (f"; {p['keys_shorter_than_cliff']} of {p['keys']} keys are "
+                              "shorter than that, so the cliff describes the right edge "
+                              "only" if p["keys_shorter_than_cliff"] else "")
+                           + (f"; folded at {p['fold']}, distance {p['distance_to_cliff']}"
+                              if p["distance_to_cliff"] is not None else
+                              f"; distance undefined ({p['distance_why_not']})"))
+                    if p["reason_empty"] == "threshold_unreachable_at_fold":
+                        why += (f" · at-scale verdict unreachable here (threshold "
+                                f"{p['threshold_at_first_clean_fold']:.3g} vs {p['keys']} keys)")
+                line(True if cliff is None or p["fold"] is None else
+                     (p["distance_to_cliff"] or 0) > 1,
+                     f"key cliff · {p['population']}",
+                     f"{p['keys']} keys, {span} — {why}",
+                     "keys are used whole here; a cliff only bites if something starts "
+                     "truncating them")
     except Exception:  # noqa: BLE001
         pass
     agents = (root / "AGENTS.md").exists()
     line(agents, "AGENTS.md", "present (cross-IDE context)" if agents else "missing",
          "run `omni-memory bind`")
-    settings = root / ".claude" / "settings.json"
-    proj_hooked = settings.exists() and "omni_memory hook" in settings.read_text(
-        encoding="utf-8", errors="ignore")
-    if proj_hooked:
-        line(True, "Claude Code hooks", "wired (project settings)")
-    elif _plugin_hooks_present():
+    # RULE: compare the wired event SET against what `bind` writes today, not the
+    # presence of the substring `omni_memory hook`. A settings.json written by an older
+    # version passes a substring test with every event added since silently missing —
+    # which is how a store ends up with an empty read ledger while every record still
+    # claims `observed`, and how this very repo was running: three events wired, two
+    # (PostToolUse, PreCompact) absent, and `doctor` calling it wired.
+    from . import install
+    want = set(install._hooks_block())
+    have = _wired_events(root / ".claude" / "settings.json")
+    plugin = _plugin_hooks_present()
+    if have:
+        missing = sorted(want - have)
+        line(not missing, "Claude Code hooks",
+             f"wired (project settings): {len(have)} event(s)"
+             + (f" · ⚠ {len(missing)} added by a later version are MISSING: "
+                f"{', '.join(missing)}" if missing else ""),
+             "re-run `omni-memory bind claude-code` to reconcile the hook block "
+             "(existing events are preserved)" if missing else "")
+    elif plugin:
         line(True, "Claude Code hooks", "wired (marketplace plugin)")
     else:
         line(False, "Claude Code hooks", "not installed",

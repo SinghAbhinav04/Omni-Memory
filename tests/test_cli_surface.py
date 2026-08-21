@@ -72,3 +72,50 @@ def test_hook_is_hidden_from_help(capsys):
     assert "systemmap" in out                    # the listing rendered
     assert "==SUPPRESS==" not in out             # argparse 3.9 leaks this literal
     assert "\n    hook " not in out              # not described in the subcommand list
+
+
+# ── an install written by an older version is not the same as a current one ──
+
+def test_wired_events_are_parsed_not_grepped(tmp_path):
+    """`doctor` used to test for the substring `omni_memory hook` in settings.json, which
+    answers "at least one event" — the same answer for a complete install and for one
+    missing every event added since. This repo was running on exactly that: three events
+    wired, PostToolUse absent, an empty read ledger, and a green hook line."""
+    import json
+    s = tmp_path / "settings.json"
+    s.write_text(json.dumps({"hooks": {
+        "SessionStart": [{"hooks": [{"type": "command",
+                                     "command": "python3 -m omni_memory hook start"}]}],
+        "UserPromptSubmit": [{"hooks": [{"type": "command",
+                                         "command": "python3 -m omni_memory hook inject"}]}],
+        "SessionEnd": [{"hooks": [{"type": "command",
+                                   "command": "python3 -m omni_memory hook capture"}]}],
+    }}))
+    have = cli._wired_events(s)
+    assert have == {"SessionStart", "UserPromptSubmit", "SessionEnd"}
+    assert set(install._hooks_block()) - have == {"PostToolUse", "PreCompact"}
+
+
+def test_a_complete_install_reports_nothing_missing(tmp_path):
+    """The control: what `bind` writes today must reconcile clean against itself, or the
+    warning above fires on every healthy setup and gets ignored."""
+    import json
+    s = tmp_path / "settings.json"
+    s.write_text(json.dumps({"hooks": install._hooks_block()}))
+    assert cli._wired_events(s) == set(install._hooks_block())
+
+
+def test_foreign_hooks_are_not_counted_as_ours(tmp_path):
+    """Someone else's PostToolUse hook must not make our integration look installed."""
+    import json
+    s = tmp_path / "settings.json"
+    s.write_text(json.dumps({"hooks": {
+        "PostToolUse": [{"hooks": [{"type": "command", "command": "some-other-tool run"}]}]}}))
+    assert cli._wired_events(s) == set()
+
+
+def test_a_missing_or_broken_settings_file_wires_nothing(tmp_path):
+    assert cli._wired_events(tmp_path / "nope.json") == set()
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json")
+    assert cli._wired_events(broken) == set()

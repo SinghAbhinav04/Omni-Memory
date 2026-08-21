@@ -5,7 +5,7 @@ _Standing instructions for AI coding agents in this repo._
 <!-- OMNI-MEMORY:START — auto-generated; edit outside this block only -->
 ## Project memory (OmniMemory)
 
-_Auto-generated 2026-08-20 22:01 · 11 verified memories · default branch `main`._
+_Auto-generated 2026-08-21 23:32 · 13 verified memories · default branch `main`._
 
 This project has a persistent, branch-aware memory layer that stays fresh automatically (rebuilt at session start and after commits). **It is a reliable source of truth — pull it instead of guessing.** It is NOT force-fed into every prompt (that wastes tokens); fetch it when relevant.
 
@@ -23,8 +23,8 @@ This project has a persistent, branch-aware memory layer that stays fresh automa
 - never call payments.charge() before order row is committed  `[a6ce537e978b]`
 
 **Flows**
+- fold  8 · lost 0 · collides_at 0 · headroom 8 · thr(perp)          10 · thr(hex)   9,292 → NOT_YET_MEASURABLE  `[633f5869762a]`
 - queue-operation: /resume  `[ecf4fdab432f]`
-- POST /orders -> validate -> insert orders table -> publish order.created to Kafka -> 201  `[354c8701cd14]`
 
 **API map**
 - That keeps all the force (blob-SHA vs writer-id, the exact drift/delete detection) while conceding the denominator honestly — which is the same rigor they applied to their own 0.01%, so it'll land as peer-level, not defensive.  `[c9b5a615bb44]` — `0.01`

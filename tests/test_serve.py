@@ -90,3 +90,41 @@ def test_bad_route_404(server):
     with pytest.raises(urllib.error.HTTPError) as e:
         _get(server, "/api/nope")
     assert e.value.code == 404
+
+
+# ── /api/integrity: the trust story, which until now only existed in a terminal ──
+
+def test_integrity_endpoint_reports_every_block(server):
+    """The dashboard's provenance panel is backed by the same measurements `doctor`
+    prints. All three blocks must be present even on a fresh store — a missing block is
+    indistinguishable from a passing one once it is rendered."""
+    d = _get(server, "/api/integrity")
+    assert set(d) == {"provenance", "collector", "identifier"}
+    assert d["collector"]["verdict"] in ("OK", "FAIL", "SKIP")
+    assert d["identifier"]["declared"].startswith("uuid4()")
+
+
+def test_integrity_reports_the_cliff_for_every_population(server):
+    """The cliff is reported unconditionally, for both key populations, with the reason
+    it is silent when it is — a warning that cannot fire and a warning that found nothing
+    render identically otherwise."""
+    pops = {p["population"]: p for p in _get(server, "/api/integrity")["identifier"]["populations"]}
+    assert "memory.id" in pops and "code_nodes.id" in pops
+    for p in pops.values():
+        assert "collides_at_length" in p and "reason_empty" in p
+        # The curve travels with the cliff wherever a curve exists at all. One key has
+        # no curve and no cliff, and reporting an empty one is the honest answer.
+        assert bool(p["loss_curve"]) == (p["keys"] >= 2)
+    assert pops["code_nodes.id"]["fold"] is None      # nothing truncates it
+    assert pops["code_nodes.id"]["distance_to_cliff"] is None
+
+
+def test_one_failing_probe_does_not_blank_the_others(server, monkeypatch):
+    """Each block is guarded on its own. A crash in the identifier measurement must not
+    take down the panel that would have explained it."""
+    from omni_memory import identifier
+    monkeypatch.setattr(identifier, "identifier_contract",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    d = _get(server, "/api/integrity")
+    assert d["identifier"] == {"error": "boom"}
+    assert "verdict" in d["collector"]                # the others still measured
